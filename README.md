@@ -1,6 +1,6 @@
 # Dual-Career Planner for College Athletes
 
-RVCE Design Thinking Lab (CS238DL) prototype. The planner does four jobs for college athletes:
+A planner for college athletes balancing sport and studies. It does four jobs:
 - flags tournament-vs-exam clashes
 - produces the attendance-exemption letter and tracks its sign-off (PED, proctor, HoD), with QR verification for faculty
 - reminds athletes before tournaments
@@ -15,16 +15,16 @@ The app opens at http://localhost:8501 in **demo mode**, with 10 demo athletes. 
 | Who | Username | Password |
 |---|---|---|
 | Athlete | `1RV25CS012` (any demo USN) | same as the USN |
-| Coach (Cricket) | `coach.cricket` | `rvce-demo` |
-| Physical Education Director | `ped` | `rvce-demo` |
-| Proctor / HoD (CSE) | `proctor.cse` / `hod.cse` | `rvce-demo` |
-| Admin | `admin` | `rvce-demo` |
+| Coach (Cricket) | `coach.cricket` | `planner-demo` |
+| Physical Education Director | `ped` | `planner-demo` |
+| Proctor / HoD (CSE) | `proctor.cse` / `hod.cse` | `planner-demo` |
+| Admin | `admin` | `planner-demo` |
 
 Athletes see the data consent notice the first time they sign in. Demo dates move forward automatically, so there are always upcoming tournaments.
 
 ### Before real data goes in
 1. Sign in as `admin` and open **Settings**.
-2. Enter RVCE's attendance rule, semester dates and letter wording once the department confirms them.
+2. Enter your college's name, attendance rule, semester dates and letter wording.
 3. Under **Switch to real data**, choose a new admin password. This deletes all demo data and every demo login, because their passwords are public.
 4. Import the real roster (**Roster import**). Each athlete's first password is their USN, and they must change it at first sign-in. Passwords need 8+ characters.
 

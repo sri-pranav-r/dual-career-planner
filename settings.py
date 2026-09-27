@@ -2,8 +2,8 @@
 College rules and letter wording, editable by admins (Settings tab) and
 stored in the core `meta` table under "setting.<key>".
 
-Defaults are placeholders until RVCE confirms its attendance rule and
-letter format; change them in the app, not in code.
+Defaults are placeholders until the college confirms its attendance rule
+and letter format; change them in the app, not in code.
 """
 from __future__ import annotations
 

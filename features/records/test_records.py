@@ -218,7 +218,7 @@ def test_semester_summary_counts_tournaments_training_and_injuries(con):
     assert t["days_away"] >= 4 and t["tests_missed"] >= 1 and t["letter"] == "Not drafted"
     assert s["training"]["sessions"] > 30 and s["training"]["weeks_logged"] >= 6
     assert len(s["injuries"]) == 1 and s["wellness"]["sleep"] > 0
-    doc = logic.summary_docx(s, "R V College of Engineering")
+    doc = logic.summary_docx(s, "Your College")
     assert doc[:2] == b"PK"
 
 

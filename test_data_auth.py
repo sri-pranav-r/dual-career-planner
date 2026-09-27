@@ -202,7 +202,7 @@ def test_unknown_role_rejected(con):
 
 def test_password_rules(con):
     u = uid(con, "coach.cricket")
-    for bad in ("short", "coach.cricket", "password", "rvce-demo"):
+    for bad in ("short", "coach.cricket", "password", "planner-demo"):
         with pytest.raises(ValueError):
             auth.set_password(con, u.id, bad)
     auth.set_password(con, u.id, "a-good-one-9")

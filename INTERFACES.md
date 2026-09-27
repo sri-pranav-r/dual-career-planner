@@ -150,7 +150,7 @@ settings.base_url(con) -> str           # where the app is reachable, for links 
 | `on_duty_counts_as_present` | True | whether sport absences with an approved letter count as present |
 | `max_on_duty_days` | 0 | the cap on on-duty days per semester (0 = no cap) |
 | `semester_start` / `semester_end` | "" | ISO dates. Empty means unknown, so assume the last 120 days |
-| `college_name` | "R V College of Engineering" | |
+| `college_name` | "Your College" | |
 | `letter_*` | see `settings.DEFAULTS` | letter wording: addressee, through line, request paragraph, signature lines |
 | `base_url` | "" | empty means auto-detect (PLANNER_BASE_URL env, then the browser's host, then the LAN IP) |
 

@@ -9,11 +9,11 @@ APP = str(Path(__file__).with_name("app.py"))
 
 ACCOUNTS = [
     ("1RV25CS012", "1RV25CS012", "Hi Aarav"),
-    ("coach.cricket", "rvce-demo", "Squad overview"),
-    ("ped", "rvce-demo", "Squad overview"),
-    ("proctor.cse", "rvce-demo", "Athletes away"),
-    ("hod.cse", "rvce-demo", "Athletes away"),
-    ("admin", "rvce-demo", "Squad overview"),
+    ("coach.cricket", "planner-demo", "Squad overview"),
+    ("ped", "planner-demo", "Squad overview"),
+    ("proctor.cse", "planner-demo", "Athletes away"),
+    ("hod.cse", "planner-demo", "Athletes away"),
+    ("admin", "planner-demo", "Squad overview"),
 ]
 
 
@@ -51,7 +51,7 @@ def test_each_role_renders(app, username, password, expect):
 
 
 def test_coach_only_sees_their_sport(app):
-    at = sign_in(app, "coach.cricket", "rvce-demo")
+    at = sign_in(app, "coach.cricket", "planner-demo")
     squad = at.dataframe[0].value
     assert set(squad["Sport"]) == {"Cricket"}
 
@@ -67,7 +67,7 @@ def test_refresh_keeps_you_signed_in(app):
 
 
 def test_admin_settings_tab_renders(app):
-    at = sign_in(app, "admin", "rvce-demo")
+    at = sign_in(app, "admin", "planner-demo")
     assert "Settings" in [t.label for t in at.tabs]
     assert "College rules" in texts(at)
 

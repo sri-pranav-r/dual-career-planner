@@ -32,7 +32,7 @@ SYNONYMS = {
     "email": ["email", "emailid", "mail", "emailaddress"],
 }
 REQUIRED = ("usn", "name", "dept", "sem", "sport")
-USN_RE = re.compile(r"^1RV\d{2}[A-Z]{2,3}\d{3}$")
+USN_RE = re.compile(r"^\d[A-Z]{2}\d{2}[A-Z]{2,3}\d{3}$")   # VTU-style: 1RV25CS012
 
 # Common ways the department writes a branch -> the short code the app uses.
 DEPT_ALIASES = {
@@ -98,7 +98,7 @@ def validate(df: pd.DataFrame) -> tuple[list[dict], list[str]]:
             continue
         rec["usn"] = rec["usn"].upper().replace(" ", "")
         if not USN_RE.match(rec["usn"]):
-            problems.append(f"Row {line}: USN '{rec['usn']}' doesn't look like an RVCE USN (e.g. 1RV25CS012).")
+            problems.append(f"Row {line}: USN '{rec['usn']}' doesn't look like a USN (e.g. 1RV25CS012).")
             continue
         if rec["usn"] in seen:
             problems.append(f"Row {line}: USN {rec['usn']} appears twice; kept the first.")

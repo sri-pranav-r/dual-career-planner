@@ -1,5 +1,5 @@
 """
-Builds the demo files in this folder, laid out like real RVCE documents:
+Builds the demo files in this folder, laid out like real college documents:
   timetable-cse-3a.xlsx   department grid with merged lab cells and a code legend
   timetable-cse-3a.png    the same grid as a screenshot (for the OCR path)
   exam-calendar-odd-sem.pdf  calendar of events + subject-wise CIE timetable
@@ -35,7 +35,7 @@ def xlsx():
     wb = Workbook()
     ws = wb.active
     ws.title = "III SEM A"
-    ws.append(["R V COLLEGE OF ENGINEERING - DEPT OF CSE - III SEMESTER 'A' SECTION - TIMETABLE 2026-27 (ODD)"])
+    ws.append(["DEPT OF CSE - III SEMESTER 'A' SECTION - TIMETABLE 2026-27 (ODD)"])
     ws.append([])
     for r in GRID:
         ws.append(r)
@@ -89,7 +89,7 @@ def pdf():
     grid = TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.black),
                        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey)])
     story = [
-        Paragraph("R V COLLEGE OF ENGINEERING, BENGALURU", ss["Title"]),
+        Paragraph("COLLEGE EXAMINATION SECTION", ss["Title"]),
         Paragraph("Calendar of Events - III Semester B.E. - Odd Semester 2026-27", ss["Heading2"]),
         Table([
             ["Sl. No", "Event", "Date(s)"],

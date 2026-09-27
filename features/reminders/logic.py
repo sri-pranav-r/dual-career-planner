@@ -185,7 +185,7 @@ def tournament_message(con, athlete: dict, tournament: dict, today: date) -> str
     tests = sum(c.kind in TESTS for c in clashes)
     classes = sum(c.kind in ("class", "lab") for c in clashes)
     when = "today" if days <= 0 else "tomorrow" if days == 1 else f"in {days} days"
-    head = f"RVCE planner: {tournament['name']} {'starts' if days > 0 else 'is'} {when} (away from {first.strftime(DAY_FMT)})."
+    head = f"Planner: {tournament['name']} {'starts' if days > 0 else 'is'} {when} (away from {first.strftime(DAY_FMT)})."
     if not clashes:
         return f"{head} No classes or tests clash. Good luck!"
     parts = [_plural(tests, "test")] if tests else []
@@ -241,9 +241,9 @@ def silent_athletes(con, today: date, athlete_ids: list[int] | None = None) -> l
 def nudge_message(con, last: date | None, days: int | None) -> str:
     link = _link(con)
     if last is None:
-        return ("RVCE planner: you haven't logged any training yet. Log each session (minutes and effort 1-10) "
+        return ("Planner: you haven't logged any training yet. Log each session (minutes and effort 1-10) "
                 f"so your coach can see your load before tournaments.{link}")
-    return (f"RVCE planner: you haven't logged training since {last.strftime(DAY_FMT)} ({days} days). "
+    return (f"Planner: you haven't logged training since {last.strftime(DAY_FMT)} ({days} days). "
             f"Log today's session (minutes and effort 1-10), even a rest day, so your load stays accurate.{link}")
 
 

@@ -157,7 +157,7 @@ def acwr_zone(ratio: float | None) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 DEFAULT_LETTER = {
-    "college_name": "R V College of Engineering",
+    "college_name": "Your College",
     "letter_to": "The Head of Department, {dept}",
     "letter_through": "Through: Class teacher / Proctor ({proctor}) and the Physical Education Director",
     "letter_subject": "Request for attendance exemption and make-up assessment for participation in {tournament}",

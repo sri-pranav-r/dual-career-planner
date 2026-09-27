@@ -359,7 +359,7 @@ def refresh_demo_dates(con, today: date | None = None) -> int:
 
 
 # Demo logins only exist in demo mode; "Switch to real data" (data.start_fresh) deletes them.
-DEMO_PASSWORD = "rvce-demo"
+DEMO_PASSWORD = "planner-demo"
 DEMO_STAFF = [
     # username, name, role, title, dept, sport
     ("admin", "Sports Office Admin", "admin", "", None, None),
@@ -423,7 +423,7 @@ def seed(con, today: date | None = None):
                    see + timedelta(days=1), see + timedelta(days=5), 2, 1, [ids[2], ids[6]])
     add_tournament(con, "Khelo India University Games - Athletics Trials", "Athletics", "Sree Kanteerava Stadium",
                    today + timedelta(days=21), today + timedelta(days=22), 0, 0, [ids[3], ids[8]])
-    add_tournament(con, "RVCE Open Badminton", "Badminton", "RVCE Sports Complex",
+    add_tournament(con, "College Open Badminton", "Badminton", "College Sports Complex",
                    today + timedelta(days=5), today + timedelta(days=5), 0, 0, [ids[5], ids[9]])
 
     # Six weeks of training logs. Athlete 0 spikes in the last week (ACWR > 1.5).

@@ -115,7 +115,7 @@ def authenticate(con, username, password) -> User | None:
     return get_user(con, row[0])
 
 
-COMMON_PASSWORDS = {"password", "12345678", "123456789", "qwertyui", "rvce-demo", "admin123", "password1"}
+COMMON_PASSWORDS = {"password", "12345678", "123456789", "qwertyui", "planner-demo", "admin123", "password1"}
 
 
 def check_password_strength(password: str, username: str | None = None) -> None:

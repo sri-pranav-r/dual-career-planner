@@ -54,7 +54,6 @@ if route:
 # ----------------------------------------------------------------- login
 def login_page():
     st.title("🏅 Dual-Career Planner")
-    st.caption("RVCE Design Thinking Lab prototype")
     col, _ = st.columns([1, 1])
     with col:
         auth.login_form()
@@ -102,7 +101,6 @@ if user.must_change_password:
 # ----------------------------------------------------------------- sidebar
 ROLE_LABEL = {"athlete": "Athlete", "coach": "Coach", "faculty": "Faculty", "admin": "Admin"}
 st.sidebar.title("🏅 Dual-Career Planner")
-st.sidebar.caption("RVCE Design Thinking Lab prototype")
 role_label = "Physical Education Director" if user.is_ped else ROLE_LABEL[user.role]
 if user.role == "coach" and user.sport:
     role_label += f" · {user.sport}"
@@ -607,7 +605,7 @@ def render_settings():
             for k, v in vals.items():
                 settings.set(con, k, v)
             st.success("Saved. New downloads use this wording.")
-        if b.form_submit_button("Restore RVCE draft wording"):
+        if b.form_submit_button("Restore default wording"):
             for k in vals:
                 settings.set(con, k, settings.DEFAULTS[k])
             st.rerun()

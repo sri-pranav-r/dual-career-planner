@@ -693,7 +693,7 @@ timetable and test dates; the tournaments you're entered in and your exemption l
 (minutes and effort) and weekly wellness check-ins you log; and any injuries you or your coach record.
 
 **Why.** To spot tournament and exam clashes early, prepare and track your exemption letters, and keep your training \
-load safe. It's also used, without your name, in our Design Thinking Lab project report at RVCE.
+load safe. It's also used, without your name, in the project report.
 
 **Who can see it.** You. Your sport's coach and the Physical Education Director. Faculty in your department see your \
 schedule, clashes, letters and training load, but not your wellness check-ins or injuries. The sports office admin \

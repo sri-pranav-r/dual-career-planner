@@ -20,7 +20,7 @@ Timetable import and exam calendar import, so nobody types class slots or test d
   added later by the roster import get the same dates (`roster_imported` hook). Re-importing does not duplicate.
 
 Files: `parsers.py` (pure parsing), `logic.py` (saving, hook), `ui.py` (two tabs), `test_imports.py`,
-`samples/` (RVCE-style demo files; rebuild with `python3 samples/make_samples.py`).
+`samples/` (college-style demo files; rebuild with `python3 samples/make_samples.py`).
 
 Tables it owns: `imports_class_timetable`, `imports_class_events`, `imports_log`.
 On `athlete_deleted` it removes the log rows of that athlete's own timetable uploads; class-level tables hold no personal data and stay.
