@@ -602,7 +602,7 @@ def summaries_table(con, athlete_ids, start: date, end: date, include_health: bo
 EXPORT_SKIP_TABLES = {"meta", "auth_sessions", "verification_keys", "sqlite_sequence"}
 EXPORT_DROP_COLUMNS = {"password_hash"}
 # Health data: not shared with faculty.
-HEALTH_TABLES = {"wellness", "records_injuries"}
+HEALTH_TABLES = {"wellness", "records_injuries", "plan_suggestions", "plan_followups"}
 # Class-level tables with no personal data that faculty and coaches may export.
 SHARED_TABLES = {"imports_class_timetable", "imports_class_events"}
 

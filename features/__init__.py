@@ -22,7 +22,7 @@ load_errors: dict[str, str] = {}
 _loaded: list[dict] | None = None
 
 # Tab order across features; unknown names go last, alphabetically.
-ORDER = ["imports", "letters", "verification", "squad", "records", "reminders"]
+ORDER = ["plan", "imports", "letters", "verification", "squad", "records", "reminders"]
 
 
 def _feature_dirs():
