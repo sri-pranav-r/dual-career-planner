@@ -1,0 +1,8 @@
+planner.db
+*.db
+*.db-journal
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.streamlit/secrets.toml
