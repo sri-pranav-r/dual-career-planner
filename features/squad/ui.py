@@ -55,7 +55,6 @@ def render_makeups(con, user):
 
 def _athlete_makeups(con, user):
     aid = user.athlete_id
-    st.subheader("Make-up tests")
     st.caption("Every CIE or SEE a tournament makes you miss. Request a make-up for each one; your proctor, "
                "class teacher or HoD schedules it and you get a notification.")
     tests = logic.missed_tests(con, aid)

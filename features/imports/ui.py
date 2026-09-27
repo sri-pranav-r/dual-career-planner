@@ -47,7 +47,7 @@ def _timetable_editor(res: parsers.ImportResult, key: str) -> pd.DataFrame:
     df.insert(0, "Day", [WEEKDAYS[int(w)] for w in df["weekday"]])
     df = df.drop(columns=["weekday"]).rename(columns={"subject": "Subject", "kind": "Type"})
     edited = st.data_editor(
-        df, key=key, num_rows="dynamic", use_container_width=True, hide_index=True,
+        df, key=key, num_rows="dynamic", width="stretch", hide_index=True,
         column_config={
             "Day": st.column_config.SelectboxColumn(options=WEEKDAYS[:6], required=True),
             "Subject": st.column_config.TextColumn(required=True),
@@ -156,7 +156,7 @@ def render_exam_calendar_import(con, user):
     df = res.rows.copy()
     df.insert(0, "Use", True)
     edited = st.data_editor(
-        df, key=f"imp_ex_edit_{up.name}", num_rows="dynamic", hide_index=True, use_container_width=True,
+        df, key=f"imp_ex_edit_{up.name}", num_rows="dynamic", hide_index=True, width="stretch",
         column_config={
             "Use": st.column_config.CheckboxColumn(default=True),
             "date": st.column_config.DateColumn("Date", format="ddd DD MMM YYYY", required=True),
@@ -177,4 +177,4 @@ def render_exam_calendar_import(con, user):
     if not hist.empty:
         with st.expander("Recent imports"):
             st.dataframe(hist[["imported_at", "kind", "dept", "sem", "section", "source_name", "rows", "athletes"]],
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")

@@ -46,23 +46,32 @@ The athlete must also opt in. Reminders run once a day on the first page load, o
 ### Optional
 Photo timetables need the Tesseract OCR program (`apt install tesseract-ocr`, `brew install tesseract`, or the Windows installer). Streamlit Cloud installs it from `packages.txt`.
 
+## Finding your way around
+Everything sits in a menu on the left, grouped into a few sections. On a phone the menu is tucked behind the arrow at the top left, and a **Go to** list sits at the top of every page. Each page opens with a line saying what it shows and what to do there, and **Help** lists every page for your role.
+
+Every role starts on **Home**. It shows what needs your attention, such as a letter waiting for your signature, a load spike or a missed test with no make-up request, with a button to the right page. A short **Start here** list covers first-time setup. The page in view is kept in the address (`?p=...`), so a refresh stays on it.
+
 ## Who sees what
 - **Athlete:** their own data only.
-  - Overview, clashes, letter download, training load, wellness, and logging.
-  - Timetable import, letter status, notifications, faculty decisions, make-up test requests, and attendance risk.
-  - Calendar, injuries, taper plan, semester summary, privacy and data, and reminder settings.
+  - **Today:** Home, Next 14 days, Calendar, Notifications.
+  - **Academics:** Clashes, Exemption letters (download, sign-off progress, faculty decisions), Make-up tests, Attendance, Timetable and tests.
+  - **Training and health:** Log training, Training load (load and wellness), Injuries, Taper plan.
+  - **You:** Semester summary, Reminder settings, Privacy and data, Help.
 - **Coach:** athletes in their sport.
-  - Squad table, tournaments (athletes are notified when a tournament changes), squad selection with a clash preview, and bulk letters.
-  - Make-up tests, attendance risk, the injury dashboard, taper plans, and the weekly team load report.
-  - Reminders, export, and roster import.
+  - **Overview:** Home, Squad, Athlete detail, Calendar.
+  - **Tournaments and letters:** Tournaments (athletes are notified when one changes), Squad selection with a clash preview, Letters (sign-off board, faculty decisions, bulk download), Reminders.
+  - **Academics:** Make-up tests, Attendance risk.
+  - **Training and health:** Next 14 days, Team load report, Injuries, Taper plans, Pilot results.
+  - **Reports and setup:** Semester summary, Export, Roster import, Help.
 - **PED** (a coach with no sport): all sports, and signs letters at the PED step.
 - **Faculty** (teacher, proctor or HoD): their department, optionally narrowed to a semester and section.
-  - Upcoming absences and the make-up list, letter approvals, and the exam calendar import.
-  - Calendar, semester summary, and export. Faculty never see injuries or wellness data.
-- **Admin:** everything, plus Users, Settings, the consent overview, and carrying out data-deletion requests.
+  - Home, Upcoming absences, Athlete detail (clashes and letters only), Calendar, Letters, Make-up tests, Attendance risk, Import exam calendar, Import timetable, Semester summary, Export and Help.
+  - Faculty never see injuries, wellness or training load.
+- **Admin:** everything, plus Users, Settings, and Privacy and consent (the consent overview and carrying out data-deletion requests).
 
 ## Files
-- `app.py`: the Streamlit UI, routed by role.
+- `app.py`: the Streamlit UI: Home pages, the core screens, and routing by role.
+- `nav.py`: the menu. Which pages each role gets, their sections, and the line at the top of each page.
 - `core.py`: clash detection, session-RPE and ACWR, and the letter .docx.
 - `data.py`: schema, migrations, readers and writers, events, the demo seed, and the switch to real data.
 - `auth.py`: login, roles, permissions, and remember-me sessions.
@@ -82,7 +91,7 @@ Photo timetables need the Tesseract OCR program (`apt install tesseract-ocr`, `b
     pip install -r requirements-dev.txt
     python3 -m pytest -q
 
-This covers core, auth, roster, settings, a headless UI check that signs in as each role, and every feature module.
+This covers core, auth, roster, settings, the menu, a headless UI check that signs in as each role and opens every page in its menu, and every feature module.
 
 ## How the numbers work
 - Session load (AU) = minutes × RPE (Foster's session-RPE).

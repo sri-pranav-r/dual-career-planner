@@ -1,6 +1,8 @@
 """Streamlit tabs for the letter tracker and the athlete's notification inbox."""
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
@@ -35,7 +37,7 @@ def _history(con, letter_id):
         df = pd.DataFrame(h)
         df["stage"] = df["stage"].map(logic.STAGE_LABELS)
         st.dataframe(df.rename(columns={"stage": "Stage", "changed_at": "When", "changed_by": "By", "note": "Note"}),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
 
 
 # ----------------------------------------------------------------- tab: Letter status
@@ -96,10 +98,16 @@ def _staff_board(con, user):
     st.subheader("Exemption letters by tournament")
     visible = auth.visible_athlete_ids(con, user)
     tours = data.all_tournaments(con)
+    if not tours.empty:   # only tournaments with one of your athletes entered; ones not over yet first
+        tours = tours[[bool(logic.letters_for_tournament(con, int(t), athlete_ids=visible)) for t in tours["id"]]]
     if tours.empty:
-        st.info("No tournaments yet.")
+        st.info("None of your athletes are entered in a tournament yet.")
         return
-    options = {f"{t['name']} ({t['start_date']})": int(t["id"]) for _, t in tours.iterrows()}
+    today = date.today()
+    tours = tours.assign(_over=[pd.Timestamp(e).date() < today for e in tours["end_date"]]).sort_values(
+        ["_over", "start_date"])
+    options = {f"{t['name']} ({t['start_date']})" + (" · over" if t["_over"] else ""): int(t["id"])
+               for _, t in tours.iterrows()}
     label = st.selectbox("Tournament", list(options))
     rows = logic.letters_for_tournament(con, options[label], athlete_ids=visible)
     if not rows:
@@ -178,4 +186,4 @@ def unread_badge(con, user) -> str:
     if getattr(user, "role", None) != "athlete" or not getattr(user, "athlete_id", None):
         return ""
     n = logic.unread_count(con, user.athlete_id)
-    return f"🔔 {n} new notification{'s' if n != 1 else ''}. Open the Notifications tab." if n else ""
+    return f"🔔 {n} new notification{'s' if n != 1 else ''}. See Notifications in the menu." if n else ""

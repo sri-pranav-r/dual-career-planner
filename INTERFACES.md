@@ -34,7 +34,8 @@ FEATURE = {
 ```
 
 Callables are given as `"module:function"` strings inside your folder, so core can import them lazily.
-- A tab's `render(con, user)` draws inside the tab.
+- A tab's `render(con, user)` draws inside a page of the menu. Core draws the page title and a one-line explanation above it, so start with the content (a `st.subheader` is fine for a section inside it).
+- Core places each tab in the menu by its label (`nav.py`). A label `nav.py` doesn't know yet still shows up, under **More**; ask core to give it a section and an explanation.
 - `roles` controls who sees the tab.
 - Re-check permissions inside the tab with `auth.can` / `auth.can_view_athlete`.
 
@@ -166,7 +167,7 @@ letterdoc.make_letter(con, athlete: dict, tournament: dict, clashes=None) -> byt
 ### Login sessions
 A refresh no longer signs people out. Core keeps a signed session token in the URL query param `s`.
 - Don't remove the `s` param in your UI.
-- If you set query params, add to them rather than replacing them.
+- If you set query params, add to them rather than replacing them. Core also uses `p` for the page in view.
 - Core table `auth_sessions` belongs to core, so don't touch it.
 
 ### Data deletion

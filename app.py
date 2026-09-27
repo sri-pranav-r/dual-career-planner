@@ -18,6 +18,7 @@ import core
 import data
 import features
 import letterdoc
+import nav
 import roster
 import settings
 
@@ -98,38 +99,6 @@ if user.must_change_password:
     change_password_page(user)
     st.stop()
 
-# ----------------------------------------------------------------- sidebar
-ROLE_LABEL = {"athlete": "Athlete", "coach": "Coach", "faculty": "Faculty", "admin": "Admin"}
-st.sidebar.title("🏅 Dual-Career Planner")
-role_label = "Physical Education Director" if user.is_ped else ROLE_LABEL[user.role]
-if user.role == "coach" and user.sport:
-    role_label += f" · {user.sport}"
-if user.role == "faculty":
-    role_label += f" · {(user.title or 'faculty').upper() if user.title == 'hod' else (user.title or 'faculty').title()} · {user.dept or ''}"
-st.sidebar.markdown(f"**{user.name}**  \n{role_label}")
-if st.sidebar.button("Sign out"):
-    auth.logout_session(con)
-    st.rerun()
-with st.sidebar.expander("Change password"):
-    with st.form("chpw"):
-        p1 = st.text_input("New password", type="password")
-        if st.form_submit_button("Update"):
-            try:
-                auth.set_password(con, user.id, p1)
-                st.success("Password updated.")
-            except ValueError as e:
-                st.error(str(e))
-if auth.can(user, "manage_users") and data.get_meta(con, "demo") == "1":
-    st.sidebar.divider()
-    if st.sidebar.button("Reset demo data"):
-        auth.logout_session(con)
-        data.reset(con)
-        st.rerun()
-if features.load_errors and auth.can(user, "manage_users"):
-    with st.sidebar.expander("⚠️ Feature load errors"):
-        for name, err in features.load_errors.items():
-            st.code(f"{name}\n{err}")
-
 
 # ===================================================================
 #                           SHARED BUILDING BLOCKS
@@ -176,181 +145,307 @@ def upcoming_clashes(s):
     ids = set(core.upcoming(s["tours"], today)["id"].astype(int)) if not s["tours"].empty else set()
     return [c for tid, cl in s["clash_map"].items() if tid in ids for c in cl]
 
+def attention_list(items):
+    """Draw 'needs your attention' rows: (tone, text, page key), each with a button to that page."""
+    if not items:
+        st.success("You're all caught up. Nothing needs your attention right now.")
+        return
+    for i, (tone, text, key) in enumerate(items):
+        with st.container(border=True, key=f"att_{i}"):
+            c1, c2 = st.columns([3, 1], vertical_alignment="center")
+            c1.markdown(f"{TONE_ICON[tone]} {text}")
+            target = next((p for p in pages if p.key == key), None)
+            if target is not None:
+                c2.button(target.title, key=f"att_go_{i}", icon=target.icon, on_click=nav.go, args=(key,),
+                          width="stretch")
 
-def render_athlete(athlete, read_only=False):
+
+def start_here(steps):
+    """
+    A short getting-started list: (done, text, page key). done=None is a plain step with no tick.
+    Open while any tickable step is left.
+    """
+    left = sum(1 for done, _, _ in steps if done is False)
+    tickable = sum(1 for done, _, _ in steps if done is not None)
+    title = f"Start here · {tickable - left} of {tickable} done" if tickable else "Start here"
+    with st.expander(title, expanded=left > 0):
+        for i, (done, text, key) in enumerate(steps, 1):
+            c1, c2 = st.container(key=f"step_{i}").columns([5, 1], vertical_alignment="center")
+            c1.markdown(f"{i}. " + ("✅ ~~" + text + "~~" if done else ("⬜ " if done is False else "") + text))
+            if key in page_keys and not done:
+                c2.button("Go", key=f"start_{i}_{key}", on_click=nav.go, args=(key,), width="stretch")
+
+
+TONE_ICON = {"red": "🔴", "amber": "🟠", "blue": "🔵"}
+
+
+def athlete_metrics(athlete, s):
+    tours, loads, zone, ratio = s["tours"], s["loads"], s["zone"], s["ratio"]
+    c1, c2, c3, c4 = st.columns(4)
+    up = core.upcoming(tours, today)
+    nxt = up.iloc[0] if not up.empty else None
+    if nxt is None:
+        c1.metric("Next tournament", "None")
+    else:
+        short = nxt["name"] if len(nxt["name"]) <= 28 else nxt["name"][:28] + "…"
+        days = (nxt["start_date"] - today).days
+        c1.metric("Next tournament", short, "on now" if days <= 0 else f"in {days} days")
+    ahead = upcoming_clashes(s)
+    serious = sum(1 for c in ahead if c.kind in ("CIE", "SEE"))
+    c2.metric("Clashes ahead", len(ahead), f"{serious} tests/exams", delta_color="inverse")
+    c3.metric("Training load zone", zone, f"ACWR {ratio:.2f}" if ratio is not None else "n/a", delta_color="off")
+    wk = loads.iloc[-7:].sum()
+    c4.metric("Load this week (AU)", int(wk), f"{int(wk - loads.iloc[-14:-7].sum()):+d} vs last week", delta_color="off")
+    return serious
+
+
+def tournaments_entered(s):
+    tours, clash_map = s["tours"], s["clash_map"]
+    st.markdown("#### Tournaments entered")
+    if tours.empty:
+        st.info("Not entered in any tournament yet. Your coach adds you when a squad is picked.")
+        return
+    show = tours[["name", "venue", "start_date", "end_date", "travel_before", "travel_after"]].copy()
+    show["clashes"] = [len(clash_map[int(t)]) for t in tours["id"]]
+    show["status"] = ["over" if e < today else "on now" if st_ <= today else "upcoming"
+                      for st_, e in zip(tours["start_date"], tours["end_date"])]
+    st.dataframe(show.rename(columns={"name": "Tournament", "venue": "Venue", "start_date": "Start", "end_date": "End",
+                                      "travel_before": "Travel days before", "travel_after": "Travel days after",
+                                      "clashes": "Clashes", "status": "Status"}),
+                 hide_index=True, width="stretch")
+
+
+def athlete_attention(athlete, s):
+    """What an athlete should do next, most urgent first."""
+    aid = int(athlete["id"])
+    items = []
+    up_ids = set(core.upcoming(s["tours"], today)["id"].astype(int)) if not s["tours"].empty else set()
+    for r in feature_call("letters", "logic", "letters_for_athlete", con, aid) or []:
+        if r["tournament_id"] not in up_ids:
+            continue
+        if r["rejected"] or r["needs_redo"]:
+            items.append(("red", f"Your letter for **{r['tournament']}** needs a fresh copy.", "letters"))
+        elif r["stage"] is None and any(c.kind in ("CIE", "SEE") for c in s["clash_map"].get(r["tournament_id"], [])):
+            items.append(("red", f"Tests clash with **{r['tournament']}**. Download the exemption letter and start "
+                                 "the sign-off.", "letters"))
+    attn = feature_call("plan", "logic", "attendance_status", con, aid, today)
+    if attn and attn["risk"] == "high":
+        items.append(("red", f"Attendance in **{attn['subject']}** could drop to {attn['pct']:.0f}% "
+                             f"(minimum {attn['floor']}%).", "attendance"))
+    open_tests = [t for t in feature_call("squad", "logic", "missed_tests", con, aid) or []
+                  if t["request"] is None and t["test_date"] >= today - timedelta(days=30)]
+    if open_tests:
+        items.append(("amber", f"{len(open_tests)} missed test{'s' if len(open_tests) > 1 else ''} without a make-up "
+                               "request.", "makeups"))
+    if s["zone"] == "High risk":
+        items.append(("red", f"Training load is in the high-risk zone. {s['advice']}", "load"))
+    elif s["zone"] == "Caution":
+        items.append(("amber", f"Training load is climbing. {s['advice']}", "load"))
+    unread = feature_call("letters", "logic", "unread_count", con, aid) or 0
+    if unread:
+        items.append(("blue", f"{unread} unread notification{'s' if unread > 1 else ''}.", "inbox"))
+    pending = feature_call("plan", "logic", "to_answer", con, aid, today, 3) or []
+    if pending:
+        items.append(("blue", "Tell us whether you followed the last few days' plan (one tap each).", "plan"))
+    sess = data.sessions(con, aid)
+    last = pd.to_datetime(sess["date"]).max().date() if not sess.empty else None
+    if last is None or (today - last).days >= 3:
+        items.append(("amber", "No training logged for 3+ days. Log your sessions so the load numbers stay right."
+                      if last else "Log your first training session.", "log"))
+    w = data.wellness(con, aid)
+    lastw = pd.to_datetime(w["date"]).max().date() if not w.empty else None
+    if lastw is None or (today - lastw).days >= 7:
+        items.append(("blue", "Your weekly wellness check-in is due (30 seconds).", "log"))
+    order = {"red": 0, "amber": 1, "blue": 2}
+    return sorted(items, key=lambda i: order[i[0]])
+
+
+def part_athlete_home(athlete):
     aid = int(athlete["id"])
     s = athlete_summary(aid)
-    tours, clash_map, loads, acwr_df = s["tours"], s["clash_map"], s["loads"], s["acwr_df"]
-    zone, advice, ratio = s["zone"], s["advice"], s["ratio"]
+    athlete_metrics(athlete, s)
+    st.markdown("#### Needs your attention")
+    attention_list(athlete_attention(athlete, s))
     sess = data.sessions(con, aid)
+    steps = [
+        (not data.timetable(con, aid).empty, "Import your weekly timetable so clashes can be found.", "timetable"),
+        (bool(len(s["tours"])), "Check your clashes once your coach enters you in a tournament.", "clashes"),
+        (bool(feature_call("letters", "logic", "letters_for_athlete", con, aid)
+              and any(r["stage"] for r in feature_call("letters", "logic", "letters_for_athlete", con, aid))),
+         "Download an exemption letter and track its signatures.", "letters"),
+        (not sess.empty, "Log a training session after practice (minutes and how hard it felt).", "log"),
+        (not data.wellness(con, aid).empty, "Do the weekly wellness check-in.", "log"),
+    ]
+    start_here(steps)
+    tournaments_entered(s)
 
-    labels = ["Overview", "Clashes", "Exemption letter", "Training load", "Wellness"]
+
+def part_clashes(athlete, s=None):
+    s = s or athlete_summary(int(athlete["id"]))
+    st.caption("Tournament window (including travel days) checked against the weekly timetable and one-off "
+               "CIE / SEE dates.")
+    up = core.upcoming(s["tours"], today)
+    if up.empty:
+        st.info("No upcoming tournaments, so nothing can clash yet.")
+    for _, t in up.iterrows():
+        cl = s["clash_map"][int(t["id"])]
+        summ = core.clash_summary(cl)
+        with st.expander(f"{t['name']}  ·  {t['start_date']} to {t['end_date']}  ·  {len(cl)} clashes over "
+                         f"{summ['days_affected']} days", expanded=bool(summ["CIE"] or summ["SEE"])):
+            if not cl:
+                st.success("Clean. Nothing academic falls inside this window.")
+                continue
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("SEE exams", summ["SEE"]); m2.metric("CIE tests", summ["CIE"])
+            m3.metric("Labs", summ["lab"]); m4.metric("Classes", summ["class"])
+            st.dataframe(pd.DataFrame([c.as_dict() for c in cl]).drop(columns=["Severity"]), hide_index=True,
+                         width="stretch")
+
+
+def part_letter(athlete, s=None, read_only=False):
+    aid = int(athlete["id"])
+    s = s or athlete_summary(aid)
+    st.caption("Pre-filled from the profile and the clash list. Download it, get the PED's signature, then the "
+               "proctor and HoD sign by scanning its QR code.")
+    up = core.upcoming(s["tours"], today)
+    if up.empty:
+        st.info("No upcoming tournament to write a letter for.")
+        return
+    opts = {int(t["id"]): f"{t['name']} ({t['start_date']})" for _, t in up.iterrows()}
+    tid = st.selectbox("Tournament", list(opts), format_func=opts.get, key=f"letter_t_{aid}")
+    t = up[up["id"] == tid].iloc[0].to_dict()
+    cl = s["clash_map"][tid]
+    first_day, last_day = core.away_window(t)
+    st.write(f"Away from **{first_day}** to **{last_day}**, missing **{len(cl)}** items.")
+    if cl:
+        st.dataframe(pd.DataFrame([c.as_dict() for c in cl]).drop(columns=["Severity", "Tournament"]),
+                     hide_index=True, width="stretch")
+    docx = letterdoc.make_letter(con, athlete, t, cl)
+    st.download_button("Download letter (.docx)", docx, icon=":material/download:", type="primary",
+                       file_name=f"exemption_{athlete['usn']}_{t['start_date']}.docx",
+                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                       key=f"dl_{aid}_{tid}",
+                       on_click=None if read_only else feature_call,
+                       args=None if read_only else ("letters", "logic", "create_letter", con, aid, tid),
+                       kwargs=None if read_only else {"by": user.name})
     if not read_only:
-        labels.append("Log / add")
-    extra = features.tabs_for("athlete") if not read_only else []
-    tabs = st.tabs(labels + [lbl for lbl, _ in extra])
-    tab = dict(zip(labels, tabs))
+        st.caption("Downloading starts tracking the letter. Follow its signatures on the Sign-off progress tab.")
 
-    # ---------------- Overview
-    with tab["Overview"]:
-        first = athlete["name"].split()[0]
-        st.subheader(f"Hi {first}, here is your week" if not read_only else f"{athlete['name']} · {athlete['usn']}")
-        c1, c2, c3, c4 = st.columns(4)
-        up = core.upcoming(tours, today)
-        nxt = up.iloc[0] if not up.empty else None
-        if nxt is None:
-            c1.metric("Next tournament", "None")
-        else:
-            short = nxt["name"] if len(nxt["name"]) <= 28 else nxt["name"][:28] + "…"
-            days = (nxt["start_date"] - today).days
-            c1.metric("Next tournament", short, "on now" if days <= 0 else f"in {days} days")
-        ahead = upcoming_clashes(s)
-        serious = sum(1 for c in ahead if c.kind in ("CIE", "SEE"))
-        c2.metric("Clashes ahead", len(ahead), f"{serious} tests/exams", delta_color="inverse")
-        c3.metric("Training load zone", zone, f"ACWR {ratio:.2f}" if ratio is not None else "n/a", delta_color="off")
-        wk = loads.iloc[-7:].sum()
-        c4.metric("Load this week (AU)", int(wk), f"{int(wk - loads.iloc[-14:-7].sum()):+d} vs last week", delta_color="off")
 
-        if zone == "High risk":
-            st.error(f"**Training load warning.** {advice}")
-        elif zone == "Caution":
-            st.warning(f"**Load climbing.** {advice}")
-        if serious:
-            st.warning(f"**{serious}** CIE or SEE assessments clash with upcoming tournaments. "
-                       "Generate the exemption letter early: the Clashes tab shows exactly which ones.")
-        else:
-            st.success("No tests or exams clash with upcoming tournaments right now.")
+def part_load(athlete, s=None):
+    aid = int(athlete["id"])
+    s = s or athlete_summary(aid)
+    zone, advice, acwr_df = s["zone"], s["advice"], s["acwr_df"]
+    st.caption("Session load = minutes × RPE. ACWR = 7-day average ÷ 28-day average. Above 1.5 is the high-risk zone "
+               "in the sports-science literature; 0.8 to 1.3 is the sweet spot.")
+    {"High risk": st.error, "Caution": st.warning, "No data yet": st.info}.get(zone, st.success)(
+        advice if zone == "No data yet" else f"**{zone}** · {advice}")
+    sess = data.sessions(con, aid)
+    if sess.empty:
+        st.info("No sessions logged yet. The charts fill in as sessions are logged.")
+        return
+    st.markdown("**Daily load (AU)**")
+    st.bar_chart(acwr_df["daily_load"])
+    st.markdown("**Acute (7-day) vs chronic (28-day) average load**")
+    st.line_chart(acwr_df[["acute_7d", "chronic_28d"]].dropna(how="all"))
+    st.markdown("**ACWR over time** (1.5 = high-risk line)")
+    r = acwr_df[["acwr"]].dropna()
+    if not r.empty:
+        r["high-risk line"] = 1.5
+        r["sweet-spot floor"] = 0.8
+        st.line_chart(r)
+    st.markdown("**Recent sessions**")
+    st.dataframe(sess.tail(10).iloc[::-1], hide_index=True, width="stretch")
 
-        st.markdown("#### Tournaments entered")
-        if tours.empty:
-            st.info("Not entered in any tournament yet.")
-        else:
-            show = tours[["name", "venue", "start_date", "end_date", "travel_before", "travel_after"]].copy()
-            show["clashes"] = [len(clash_map[int(t)]) for t in tours["id"]]
-            show["status"] = ["over" if e < today else "on now" if st_ <= today else "upcoming"
-                              for st_, e in zip(tours["start_date"], tours["end_date"])]
-            st.dataframe(show, hide_index=True, width="stretch")
 
-    # ---------------- Clashes
-    with tab["Clashes"]:
-        st.subheader("Where sport and academics collide")
-        st.caption("Tournament window (including travel days) checked against the weekly timetable and one-off CIE / SEE dates.")
-        up = core.upcoming(tours, today)
-        if up.empty:
-            st.info("No upcoming tournaments.")
-        for _, t in up.iterrows():
-            cl = clash_map[int(t["id"])]
-            summ = core.clash_summary(cl)
-            with st.expander(f"{t['name']}  ·  {t['start_date']} to {t['end_date']}  ·  {len(cl)} clashes over {summ['days_affected']} days",
-                             expanded=bool(summ["CIE"] or summ["SEE"])):
-                if not cl:
-                    st.success("Clean. Nothing academic falls inside this window.")
-                    continue
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("SEE exams", summ["SEE"]); m2.metric("CIE tests", summ["CIE"])
-                m3.metric("Labs", summ["lab"]); m4.metric("Classes", summ["class"])
-                st.dataframe(pd.DataFrame([c.as_dict() for c in cl]).drop(columns=["Severity"]), hide_index=True, width="stretch")
+def part_wellness(athlete, s=None):
+    aid = int(athlete["id"])
+    s = s or athlete_summary(aid)
+    st.caption("Weekly check-ins, 1 (low) to 5 (high). High soreness during a load spike is an early warning.")
+    w = data.wellness(con, aid)
+    if w.empty:
+        st.info("No check-ins yet." + ("" if user.role != "athlete" else " Add one on the Log training page."))
+        return
+    w["date"] = pd.to_datetime(w["date"])
+    st.line_chart(w.set_index("date")[["sleep", "soreness", "stress"]])
+    last = w.iloc[-1]
+    if last["soreness"] >= 4 and s["zone"] in ("High risk", "Caution"):
+        st.error("High soreness **and** a load spike in the same week. This is the pattern that precedes most "
+                 "overuse injuries. Flag it to the coach.")
+    elif last["stress"] >= 4:
+        st.warning("Stress is high this week. Check Clashes: an exam or exemption issue may be behind it.")
 
-    # ---------------- Exemption letter
-    with tab["Exemption letter"]:
-        st.subheader("Attendance exemption / make-up request")
-        st.caption("Pre-filled from the profile and the clash list. Download, get the PED's signature, submit to the department.")
-        up = core.upcoming(tours, today)
-        if up.empty:
-            st.info("No upcoming tournament to write a letter for.")
-        else:
-            opts = {int(t["id"]): f"{t['name']} ({t['start_date']})" for _, t in up.iterrows()}
-            tid = st.selectbox("Tournament", list(opts), format_func=opts.get, key=f"letter_t_{aid}")
-            t = up[up["id"] == tid].iloc[0].to_dict()
-            cl = clash_map[tid]
-            first_day, last_day = core.away_window(t)
-            st.write(f"Away from **{first_day}** to **{last_day}**, missing **{len(cl)}** items.")
-            if cl:
-                st.dataframe(pd.DataFrame([c.as_dict() for c in cl]).drop(columns=["Severity", "Tournament"]),
-                             hide_index=True, width="stretch")
-            docx = letterdoc.make_letter(con, athlete, t, cl)
-            st.download_button("⬇️ Download letter (.docx)", docx,
-                               file_name=f"exemption_{athlete['usn']}_{t['start_date']}.docx",
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                               key=f"dl_{aid}_{tid}",
-                               on_click=None if read_only else feature_call,
-                               args=None if read_only else ("letters", "logic", "create_letter", con, aid, tid),
-                               kwargs=None if read_only else {"by": user.name})
 
-    # ---------------- Training load
-    with tab["Training load"]:
-        st.subheader("Training load and injury-risk signal")
-        st.caption("Session load = minutes × RPE. ACWR = 7-day average ÷ 28-day average. Above 1.5 is the high-risk zone "
-                   "in the sports-science literature; 0.8 to 1.3 is the sweet spot.")
-        {"High risk": st.error, "Caution": st.warning, "No data yet": st.info}.get(zone, st.success)(
-            advice if zone == "No data yet" else f"**{zone}** · {advice}")
-        st.markdown("**Daily load (AU)**")
-        st.bar_chart(acwr_df["daily_load"])
-        st.markdown("**Acute (7-day) vs chronic (28-day) average load**")
-        st.line_chart(acwr_df[["acute_7d", "chronic_28d"]].dropna(how="all"))
-        st.markdown("**ACWR over time** (1.5 = high-risk line)")
-        r = acwr_df[["acwr"]].dropna()
-        if not r.empty:
-            r["high-risk line"] = 1.5
-            r["sweet-spot floor"] = 0.8
-            st.line_chart(r)
-        st.markdown("**Recent sessions**")
-        st.dataframe(sess.tail(10).iloc[::-1], hide_index=True, width="stretch")
+def part_log(athlete):
+    aid = int(athlete["id"])
+    left, right = st.columns(2, gap="large")
+    with left:
+        st.subheader("Log a session", anchor=False)
+        with st.form("session"):
+            d = st.date_input("Date", today, max_value=today)
+            minutes = st.number_input("Minutes", 10, 300, 75, step=5)
+            rpe = st.slider("How hard was it? (RPE 1 = very easy, 10 = maximal)", 1, 10, 6)
+            stype = st.selectbox("Type", ["Skills", "Conditioning", "Match practice", "Match", "Gym", "Recovery"])
+            if st.form_submit_button("Save session", type="primary"):
+                data.add_session(con, aid, d, minutes, rpe, stype)
+                st.toast(f"Saved: {minutes} min × RPE {rpe} = {int(core.session_load(minutes, rpe))} AU")
+                st.rerun()
+    with right:
+        st.subheader("Weekly wellness check-in", anchor=False)
+        with st.form("wellness"):
+            d2 = st.date_input("Week of", today, key="wd")
+            sleep = st.slider("Sleep quality this week", 1, 5, 3)
+            sore = st.slider("Muscle soreness", 1, 5, 2)
+            stress = st.slider("Academic / life stress", 1, 5, 2)
+            if st.form_submit_button("Save check-in", type="primary"):
+                data.add_wellness(con, aid, d2, sleep, sore, stress)
+                st.toast("Check-in saved.")
+                st.rerun()
+    sess = data.sessions(con, aid)
+    if not sess.empty:
+        st.markdown("**Last few sessions**")
+        st.dataframe(sess.tail(5).iloc[::-1], hide_index=True, width="stretch")
 
-    # ---------------- Wellness
-    with tab["Wellness"]:
-        st.subheader("Weekly check-in")
-        w = data.wellness(con, aid)
-        if w.empty:
-            st.info("No check-ins yet.")
-        else:
-            w["date"] = pd.to_datetime(w["date"])
-            st.line_chart(w.set_index("date")[["sleep", "soreness", "stress"]])
-            last = w.iloc[-1]
-            if last["soreness"] >= 4 and zone in ("High risk", "Caution"):
-                st.error("High soreness **and** a load spike in the same week. This is the pattern that precedes most "
-                         "overuse injuries. Flag it to the coach.")
-            elif last["stress"] >= 4:
-                st.warning("Stress is high this week. Check the Clashes tab: an exam or exemption issue may be behind it.")
 
-    # ---------------- Data entry (athlete only)
-    if not read_only:
-        with tab["Log / add"]:
-            st.subheader("Log a session")
-            with st.form("session"):
-                d = st.date_input("Date", today, max_value=today)
-                minutes = st.number_input("Minutes", 10, 300, 75, step=5)
-                rpe = st.slider("How hard was it? (RPE 1 = very easy, 10 = maximal)", 1, 10, 6)
-                stype = st.selectbox("Type", ["Skills", "Conditioning", "Match practice", "Match", "Gym", "Recovery"])
-                if st.form_submit_button("Save session"):
-                    data.add_session(con, aid, d, minutes, rpe, stype)
-                    st.success(f"Saved: {minutes} min × RPE {rpe} = {int(core.session_load(minutes, rpe))} AU")
-                    st.rerun()
-            st.divider()
-            st.subheader("Weekly wellness check-in (30 seconds)")
-            with st.form("wellness"):
-                d2 = st.date_input("Week of", today, key="wd")
-                sleep = st.slider("Sleep quality this week", 1, 5, 3)
-                sore = st.slider("Muscle soreness", 1, 5, 2)
-                stress = st.slider("Academic / life stress", 1, 5, 2)
-                if st.form_submit_button("Save check-in"):
-                    data.add_wellness(con, aid, d2, sleep, sore, stress)
-                    st.success("Saved.")
-                    st.rerun()
-            st.divider()
-            st.subheader("Add a CIE / SEE / lab date")
-            with st.form("event"):
-                d3 = st.date_input("Date", today + timedelta(days=7), key="ed")
-                kind = st.selectbox("Type", ["CIE", "SEE", "lab"])
-                title = st.text_input("Title", "Data Structures CIE-3")
-                if st.form_submit_button("Save date"):
-                    data.add_event(con, aid, d3, kind, title)
-                    st.success("Saved.")
-                    st.rerun()
+def part_add_test(athlete):
+    aid = int(athlete["id"])
+    st.caption("For a CIE, SEE or lab test that isn't in the imported calendar yet.")
+    with st.form("event"):
+        d3 = st.date_input("Date", today + timedelta(days=7), key="ed")
+        kind = st.selectbox("Type", ["CIE", "SEE", "lab"])
+        title = st.text_input("Title", "Data Structures CIE-3")
+        if st.form_submit_button("Save date", type="primary"):
+            data.add_event(con, aid, d3, kind, title)
+            st.toast("Saved.")
+            st.rerun()
+    ev = data.events(con, aid)
+    if not ev.empty:
+        st.markdown("**Test dates on record**")
+        st.dataframe(ev.drop(columns=[c for c in ("id", "athlete_id") if c in ev.columns]), hide_index=True,
+                     width="stretch")
 
-    for (lbl, render), t in zip(extra, tabs[len(labels):]):
-        with t:
-            run_feature_tab(lbl, render)
+
+def render_athlete_detail(athlete):
+    """Staff drill-down on one athlete: the athlete's own screens, read-only, as tabs."""
+    aid = int(athlete["id"])
+    s = athlete_summary(aid)
+    st.subheader(f"{athlete['name']} · {athlete['usn']}", anchor=False)
+    st.caption(f"{athlete['sport']} · {athlete['dept']} · {athlete['sem']} sem")
+    health = user.role != "faculty"   # faculty never see training load or wellness
+    tabs = st.tabs(["Overview", "Clashes", "Exemption letter"] + (["Training load", "Wellness"] if health else []))
+    with tabs[0]:
+        if health:
+            athlete_metrics(athlete, s)
+        tournaments_entered(s)
+    with tabs[1]:
+        part_clashes(athlete, s)
+    with tabs[2]:
+        part_letter(athlete, s, read_only=True)
+    if health:
+        with tabs[3]:
+            part_load(athlete, s)
+        with tabs[4]:
+            part_wellness(athlete, s)
 
 
 def squad_table(ids):
@@ -388,9 +483,6 @@ def visible_tournaments():
 
 
 def render_squad(ids):
-    st.subheader("Squad overview")
-    st.caption("Every athlete's next tournament, academic clashes, and training-load zone in one table. "
-               "Red rows need a conversation this week.")
     if not ids:
         st.info("No athletes in your scope yet. Import the roster first.")
         return
@@ -412,7 +504,6 @@ def athlete_picker(ids, key):
 
 
 def render_tournaments(ids):
-    st.subheader("Tournaments")
     tours = visible_tournaments()
     athletes = data.athletes(con)
     athletes = athletes[athletes["id"].isin(ids)]
@@ -476,7 +567,6 @@ def render_tournaments(ids):
 
 
 def render_roster_import():
-    st.subheader("Import athlete roster")
     st.caption("Upload the sports department spreadsheet (.csv or .xlsx). Column names are matched loosely "
                "(USN / Reg No, Name, Department / Branch, Semester, Section, Sport / Game, Proctor, Phone, Email). "
                "Existing athletes are updated by USN; new ones get a login with their USN as the first password.")
@@ -508,7 +598,6 @@ def render_roster_import():
 
 
 def render_users():
-    st.subheader("Users and roles")
     st.dataframe(auth.users(con), hide_index=True, width="stretch")
     st.markdown("#### Add a staff account")
     with st.form("add_user"):
@@ -685,6 +774,145 @@ def render_class_view(ids):
     else:
         st.dataframe(pd.DataFrame(rows).sort_values("Away from"), hide_index=True, width="stretch")
 
+def staff_attention():
+    """What a coach, PED, faculty member or admin should look at, most urgent first."""
+    items = []
+    tours = visible_tournaments()
+    upcoming = core.upcoming(tours, today) if not tours.empty else tours
+    # Letters waiting for this person's signature or approval.
+    waiting = 0
+    letters_logic = None
+    try:
+        from features.letters import logic as letters_logic
+    except ImportError:
+        pass
+    if letters_logic is not None and not upcoming.empty:
+        for tid in upcoming["id"].astype(int):
+            for r in letters_logic.letters_for_tournament(con, tid, athlete_ids=ids):
+                if not r["letter_id"] or r["rejected"] or r["needs_redo"]:
+                    continue
+                nxt = letters_logic.next_stage(r["stage"])
+                if nxt and nxt != "submitted" and letters_logic.can_advance_to(user, nxt, r["athlete_id"], con):
+                    waiting += 1
+    if waiting:
+        items.append(("red", f"{waiting} exemption letter{'s' if waiting > 1 else ''} waiting for your "
+                             "signature or approval.", "letters"))
+    reqs = feature_call("squad", "logic", "requests_table", con, ids, ["requested"])
+    if reqs is not None and not reqs.empty:
+        mine = [r for _, r in reqs.iterrows()
+                if feature_call("squad", "logic", "can_decide", con, user, int(r["athlete_id"]))]
+        if mine:
+            items.append(("amber", f"{len(mine)} make-up test request{'s' if len(mine) > 1 else ''} to schedule.",
+                          "makeups"))
+    if auth.can(user, "view_squad"):
+        soon = core.starting_within(tours, today, 14) if not tours.empty else tours
+        risky, high = 0, []
+        for aid in ids:
+            s = athlete_summary(aid)
+            if any(c.kind in ("CIE", "SEE") for c in upcoming_clashes(s)):
+                risky += 1
+            if s["zone"] == "High risk":
+                high.append(data.athlete(con, aid)["name"])
+        if high:
+            items.append(("red", f"High-risk training load: {', '.join(high[:4])}"
+                                 f"{f' and {len(high) - 4} more' if len(high) > 4 else ''}.", "squad"))
+        if risky:
+            items.append(("amber", f"{risky} athlete{'s' if risky > 1 else ''} have tests clashing with an upcoming "
+                                   "tournament.", "squad"))
+        if len(soon):
+            items.append(("blue", f"{len(soon)} tournament{'s start' if len(soon) > 1 else ' starts'} in the next 14 days. "
+                                  "Check taper plans and letters.", "taper"))
+        silent = feature_call("reminders", "logic", "silent_athletes", con, today, ids) or []
+        if silent:
+            items.append(("blue", f"{len(silent)} athlete{'s' if len(silent) > 1 else ''} haven't logged training "
+                                  "for 3+ days.", "teamload"))
+        inj = feature_call("records", "logic", "squad_injury_dashboard", con, ids, today)
+        if inj and inj["current"]:
+            out = sum(1 for c in inj["current"] if c["status"] == "out")
+            items.append(("amber" if out else "blue", f"{out} injured and {len(inj['current']) - out} returning "
+                                                      "from injury.", "injuries"))
+    if auth.can(user, "view_class"):
+        away = feature_call("verification", "logic", "upcoming_absences", con, ids, today, 14)
+        if away is not None and not away.empty:
+            tests = int((away["Tests missed"] != "").sum())
+            items.append(("blue", f"{away['Athlete'].nunique()} student{'s' if away['Athlete'].nunique() > 1 else ''} "
+                                  f"away for sport in the next 14 days"
+                                  f"{f', {tests} with tests to make up' if tests else ''}.", "absences"))
+    if auth.can(user, "manage_users"):
+        dels = feature_call("records", "logic", "deletion_requests", con) or []
+        if dels:
+            items.append(("red", f"{len(dels)} data deletion request{'s' if len(dels) > 1 else ''} to carry out.",
+                          "privacy"))
+        if data.get_meta(con, "demo") == "1":
+            items.append(("blue", "The app is in demo mode. Switch to real data in Settings before a pilot.",
+                          "settings"))
+    order = {"red": 0, "amber": 1, "blue": 2}
+    return sorted(items, key=lambda i: order[i[0]])
+
+
+def part_staff_home():
+    if auth.can(user, "view_squad"):
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Athletes", len(ids))
+        k2.metric("Upcoming tournaments", len(core.upcoming(visible_tournaments(), today))
+                  if not visible_tournaments().empty else 0)
+        k3.metric("Starting in 30 days", len(core.starting_within(visible_tournaments(), today, 30))
+                  if not visible_tournaments().empty else 0)
+    else:
+        st.caption(f"You see {len(ids)} athlete{'s' if len(ids) != 1 else ''} in your scope.")
+    st.markdown("#### Needs your attention")
+    attention_list(staff_attention())
+    if user.role == "faculty":
+        steps = [
+            (None, "Once a semester, import the exam calendar so every student's tests are known.", "exam_import"),
+            (None, "See who is away for sport and which tests they will miss.", "absences"),
+            (None, "Approve or reject letters, by scanning the QR code on a letter or on the Letters page.", "letters"),
+            (None, "Schedule make-up tests for students who missed one.", "makeups"),
+        ]
+    elif auth.can(user, "manage_users"):
+        steps = [
+            (data.get_meta(con, "demo") != "1", "Set the college rules and letter wording, then switch to real data.",
+             "settings"),
+            (len(auth.users(con)) > 1, "Add staff accounts for coaches and faculty.", "users"),
+            (bool(ids), "Import the athlete roster.", "roster"),
+            (not data.all_tournaments(con).empty, "Add tournaments and pick squads.", "tournaments"),
+        ]
+    else:
+        steps = [
+            (bool(ids), "Import your athletes with Roster import.", "roster"),
+            (not visible_tournaments().empty, "Add a tournament, then pick the squad with its clash preview.",
+             "selection"),
+            (None, "Download every athlete's exemption letter in one go.", "letters"),
+            (None, "Check the Squad table and the Team load report every week.", "squad"),
+        ]
+    steps = [s for s in steps if s[2] in page_keys]
+    start_here(steps)
+
+
+def part_help():
+    st.markdown("#### What each page is for")
+    for section, items in nav.sections(pages):
+        st.markdown(f"**{section}**")
+        st.markdown("\n".join(f"- **{p.title}**: {p.blurb}" for p in items if p.key != "help"))
+    st.markdown("#### How the numbers work")
+    st.markdown(
+        "- **Session load (AU)** = minutes × RPE, where RPE is how hard the session felt from 1 to 10 "
+        "(Foster's session-RPE).\n"
+        "- **ACWR** = average daily load of the last 7 days ÷ average of the last 28 days. Above 1.5 is high risk, "
+        "1.3 to 1.5 caution, 0.8 to 1.3 the sweet spot, and below 0.8 under-trained.\n"
+        "- A **clash** is any timetable slot or CIE / SEE / lab date inside a tournament's window, travel days "
+        "included.\n"
+        f"- **Attendance risk** uses the college minimum ({settings.get(con, 'attendance_min_pct')}%), the on-duty "
+        "rule and the semester dates set by the admin in Settings.")
+    st.markdown("#### Who sees what")
+    st.markdown(
+        "- **Athletes** see only their own data.\n"
+        "- **Coaches** see athletes in their sport; the **Physical Education Director** sees every sport and signs "
+        "letters at the PED step.\n"
+        "- **Faculty** (teacher, proctor, HoD) see students in their department or class. They never see injuries, "
+        "wellness or training load.\n"
+        "- **Admins** see everything and manage users and settings.")
+
 
 # ===================================================================
 #                              ROUTING BY ROLE
@@ -695,9 +923,7 @@ try:
     feature_call("reminders", "logic", "run_if_due", con)
 except Exception as err:  # noqa: BLE001
     features.load_errors["reminders (daily run)"] = repr(err)
-badge = feature_call("letters", "ui", "unread_badge", con, user)   # draws itself or returns text
-if isinstance(badge, str) and badge:
-    st.sidebar.info(badge)
+
 
 def consent_gate():
     """
@@ -731,44 +957,126 @@ def consent_gate():
     return False
 
 
+athlete = data.athlete(con, user.athlete_id) if user.role == "athlete" and user.athlete_id else None
+
+feature_tabs = dict(features.tabs_for(user.role))
+
+
+def core_ok(name):
+    """Which core screens this user can open."""
+    if name in ("athlete_home", "clashes", "letter", "load", "wellness", "log", "add_test"):
+        return user.role == "athlete"
+    if name == "staff_home":
+        return user.role != "athlete"
+    if name == "detail":
+        return user.role != "athlete"
+    if name == "squad" or name == "tournaments":
+        return auth.can(user, "view_squad" if name == "squad" else "manage_tournaments")
+    if name == "class_view":   # the basic class list, when the verification feature isn't installed
+        return auth.can(user, "view_class") and "Upcoming absences" not in feature_tabs
+    if name == "roster":
+        return auth.can(user, "import_roster")
+    if name in ("users", "settings"):
+        return auth.can(user, "manage_users")
+    return name == "help"
+
+
+def page_detail():
+    a = athlete_picker(ids, "detail_pick")
+    if a is not None:
+        render_athlete_detail(a)
+
+
+CORE = {
+    "athlete_home": lambda: part_athlete_home(athlete),
+    "clashes": lambda: part_clashes(athlete),
+    "letter": lambda: part_letter(athlete),
+    "load": lambda: part_load(athlete),
+    "wellness": lambda: part_wellness(athlete),
+    "log": lambda: part_log(athlete),
+    "add_test": lambda: part_add_test(athlete),
+    "staff_home": part_staff_home,
+    "squad": lambda: render_squad(ids),
+    "class_view": lambda: render_class_view(ids),
+    "detail": lambda: page_detail(),
+    "tournaments": lambda: render_tournaments(ids),
+    "roster": render_roster_import,
+    "users": render_users,
+    "settings": render_settings,
+    "help": part_help,
+}
+
+pages = nav.build(user.role, feature_tabs, core_ok)
+page_keys = {p.key for p in pages}
+page = nav.current(pages, st.query_params)
+
+# ----------------------------------------------------------------- sidebar
+ROLE_LABEL = {"athlete": "Athlete", "coach": "Coach", "faculty": "Faculty", "admin": "Admin"}
+st.html(nav.CSS)
+st.sidebar.markdown("### 🏅 Dual-Career Planner")
+role_label = "Physical Education Director" if user.is_ped else ROLE_LABEL[user.role]
+if user.role == "coach" and user.sport:
+    role_label += f" · {user.sport}"
+if user.role == "faculty":
+    role_label += f" · {(user.title or 'faculty').upper() if user.title == 'hod' else (user.title or 'faculty').title()} · {user.dept or ''}"
+if athlete is not None:
+    role_label = f"{athlete['usn']} · {athlete['sport']} · {athlete['dept']} {athlete['sem']} sem"
+st.sidebar.markdown(f"**{user.name}**  \n{role_label}")
+badge = feature_call("letters", "ui", "unread_badge", con, user)   # draws itself or returns text
+if isinstance(badge, str) and badge:
+    st.sidebar.info(badge)
+nav_slot = st.sidebar.container()
+st.sidebar.divider()
+with st.sidebar.expander("Account"):
+    with st.form("chpw"):
+        p1 = st.text_input("New password", type="password")
+        if st.form_submit_button("Change password"):
+            try:
+                auth.set_password(con, user.id, p1)
+                st.success("Password updated.")
+            except ValueError as e:
+                st.error(str(e))
+    if auth.can(user, "manage_users") and data.get_meta(con, "demo") == "1":
+        if st.button("Reset demo data", help="Puts every demo account and record back to how it started."):
+            auth.logout_session(con)
+            data.reset(con)
+            st.rerun()
+if st.sidebar.button("Sign out", icon=":material/logout:"):
+    auth.logout_session(con)
+    st.rerun()
+if features.load_errors and auth.can(user, "manage_users"):
+    with st.sidebar.expander("⚠️ Feature load errors"):
+        for name, err in features.load_errors.items():
+            st.code(f"{name}\n{err}")
+
+# ----------------------------------------------------------------- the page
 if user.role == "athlete":
-    a = data.athlete(con, user.athlete_id) if user.athlete_id else None
-    if a is not None and not consent_gate():
-        st.stop()
-    if a is None:
+    if athlete is None:
         st.error("Your account isn't linked to an athlete record yet. Ask the sports office to import you in the roster.")
+        st.stop()
+    if not consent_gate():
+        st.stop()
+nav.draw_sidebar(nav_slot, pages, page)
+nav.draw_topnav(pages, page)
+if page.key == "home":   # Home greets by name instead of repeating "Home"
+    if athlete is not None:
+        nav.draw_header(page, f"Hi {athlete['name'].split()[0]}, here is your week")
     else:
-        st.sidebar.markdown(f"**{a['usn']}** · {a['dept']} · {a['sem']} sem · {a['sport']}")
-        render_athlete(a)
+        nav.draw_header(page, f"Hi {user.name or user.username}")
 else:
-    feature_tabs = features.tabs_for(user.role)
-    # The verification feature's "Upcoming absences" supersedes the basic class view; show it first.
-    absences = [ft for ft in feature_tabs if ft[0] == "Upcoming absences"]
-    sections = []
-    if auth.can(user, "view_squad"):
-        sections += [("Squad", lambda: render_squad(ids))]
-    if auth.can(user, "view_class") and not auth.can(user, "view_squad"):
-        if absences:
-            sections += [(absences[0][0], lambda: run_feature_tab(*absences[0]))]
-            feature_tabs = [ft for ft in feature_tabs if ft is not absences[0]]
-        else:
-            sections += [("Class", lambda: render_class_view(ids))]
-    sections += [("Athlete detail", None)]
-    if auth.can(user, "manage_tournaments"):
-        sections += [("Tournaments", lambda: render_tournaments(ids))]
-    if auth.can(user, "import_roster"):
-        sections += [("Roster import", render_roster_import)]
-    if auth.can(user, "manage_users"):
-        sections += [("Users", render_users), ("Settings", render_settings)]
-    tabs = st.tabs([s[0] for s in sections] + [lbl for lbl, _ in feature_tabs])
-    for (label, fn), t in zip(sections, tabs):
+    nav.draw_header(page)
+
+
+def draw_part(kind, name, label):
+    if kind == "core":
+        CORE[name]()
+    else:
+        run_feature_tab(label, feature_tabs[name])
+
+
+if len(page.parts) == 1:
+    draw_part(page.parts[0][1], page.parts[0][2], page.title)
+else:
+    for (label, kind, name), t in zip(page.parts, st.tabs([p[0] for p in page.parts])):
         with t:
-            if label == "Athlete detail":
-                a = athlete_picker(ids, "detail_pick")
-                if a is not None:
-                    render_athlete(a, read_only=True)
-            else:
-                fn()
-    for (lbl, render), t in zip(feature_tabs, tabs[len(sections):]):
-        with t:
-            run_feature_tab(lbl, render)
+            draw_part(kind, name, label)

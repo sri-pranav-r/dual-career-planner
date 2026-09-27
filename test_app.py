@@ -1,4 +1,4 @@
-"""Headless UI smoke test: sign in as each role and render every tab without errors.
+"""Headless UI smoke test: sign in as each role and open every page in its menu without errors.
 Run: python3 -m pytest -q test_app.py"""
 from pathlib import Path
 
@@ -9,11 +9,11 @@ APP = str(Path(__file__).with_name("app.py"))
 
 ACCOUNTS = [
     ("1RV25CS012", "1RV25CS012", "Hi Aarav"),
-    ("coach.cricket", "planner-demo", "Squad overview"),
-    ("ped", "planner-demo", "Squad overview"),
-    ("proctor.cse", "planner-demo", "Athletes away"),
-    ("hod.cse", "planner-demo", "Athletes away"),
-    ("admin", "planner-demo", "Squad overview"),
+    ("coach.cricket", "planner-demo", "Needs your attention"),
+    ("ped", "planner-demo", "Needs your attention"),
+    ("proctor.cse", "planner-demo", "Needs your attention"),
+    ("hod.cse", "planner-demo", "Needs your attention"),
+    ("admin", "planner-demo", "Needs your attention"),
 ]
 
 
@@ -34,7 +34,18 @@ def sign_in(at, username, password, agree=True):
 
 
 def texts(at):
-    return " ".join(str(getattr(e, "value", "")) for e in list(at.subheader) + list(at.markdown) + list(at.info) + list(at.error))
+    return " ".join(str(getattr(e, "value", "")) for e in list(at.title) + list(at.header) + list(at.subheader)
+                    + list(at.markdown) + list(at.info) + list(at.error))
+
+
+def menu(at):
+    """Page keys in the sidebar menu, in order."""
+    return [b.key[len("nav_"):] for b in at.button if (b.key or "").startswith("nav_")]
+
+
+def open_page(at, key):
+    at.query_params["p"] = key
+    return at.run()
 
 
 def test_login_page_shows_and_rejects_bad_password(app):
@@ -50,8 +61,34 @@ def test_each_role_renders(app, username, password, expect):
     assert expect in texts(at)
 
 
+@pytest.mark.parametrize("username,password", [(u, p) for u, p, _ in ACCOUNTS])
+def test_every_page_in_the_menu_opens(app, username, password):
+    at = sign_in(app, username, password)
+    keys = menu(at)
+    assert keys[0] == "home" and "help" in keys
+    for key in keys:
+        open_page(at, key)
+        assert not at.exception, (key, [e.value for e in at.exception])
+        assert not [e.value for e in at.error if "couldn't load" in e.value], key
+        assert at.header, key                         # every page has a title ...
+        assert any("page-blurb" in str(getattr(h, "proto", "")) for h in at.get("html")), key   # ... and an explanation
+
+
+def test_menu_button_switches_page(app):
+    at = sign_in(app, "1RV25CS012", "1RV25CS012")
+    next(b for b in at.button if b.key == "nav_clashes").click().run()
+    assert at.header[0].value == "Clashes" and not at.exception
+
+
+def test_faculty_never_see_training_or_wellness(app):
+    at = sign_in(app, "proctor.cse", "planner-demo")
+    open_page(at, "detail")
+    labels = [t.label for t in at.tabs]
+    assert "Clashes" in labels and "Training load" not in labels and "Wellness" not in labels
+
+
 def test_coach_only_sees_their_sport(app):
-    at = sign_in(app, "coach.cricket", "planner-demo")
+    at = open_page(sign_in(app, "coach.cricket", "planner-demo"), "squad")
     squad = at.dataframe[0].value
     assert set(squad["Sport"]) == {"Cricket"}
 
@@ -68,8 +105,8 @@ def test_refresh_keeps_you_signed_in(app):
 
 def test_admin_settings_tab_renders(app):
     at = sign_in(app, "admin", "planner-demo")
-    assert "Settings" in [t.label for t in at.tabs]
-    assert "College rules" in texts(at)
+    assert "settings" in menu(at)
+    assert "College rules" in texts(open_page(at, "settings"))
 
 
 def test_athlete_must_agree_to_data_notice_first(app):
@@ -85,5 +122,7 @@ def test_athlete_must_agree_to_data_notice_first(app):
 
 def test_athlete_cannot_see_staff_tabs(app):
     at = sign_in(app, "1RV25CS012", "1RV25CS012")
-    labels = [t.label for t in at.tabs]
-    assert "Squad" not in labels and "Users" not in labels and "Roster import" not in labels
+    keys = menu(at)
+    assert "squad" not in keys and "users" not in keys and "roster" not in keys
+    assert "Squad overview" not in texts(open_page(at, "squad"))   # a staff key in the URL falls back to Home
+    assert at.header[0].value.startswith("Hi Aarav")

@@ -160,10 +160,10 @@ def _ramp_view(con, user, inj: dict, today: date, key: str):
             for w in r["weeks"]:
                 rows.append({"Week": w["week"], "From": w["start"].strftime("%d %b"), "To": w["end"].strftime("%d %b"),
                              "% of usual load": f"{w['pct']}%",
-                             "Target (AU)": "" if w["target"] is None else int(w["target"]),
-                             "Logged (AU)": "" if w["logged"] is None else int(w["logged"]),
+                             "Target (AU)": None if w["target"] is None else int(w["target"]),
+                             "Logged (AU)": None if w["logged"] is None else int(w["logged"]),
                              "": "⚠️ over target" if w["flag"] else ""})
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
             if r["current"] and r["current"]["flag"]:
                 st.warning("This week's logged load is already above the return plan. Ease off until next week.")
         with st.expander("Update"):
@@ -208,7 +208,7 @@ def render_injuries(con, user):
                 "Back from": c["return_on"].strftime("%d %b"),
                 "This week": "" if c["this_week_pct"] is None else f"{c['this_week_pct']}% load",
                 "": "⚠️ over target" if c["over_target"] else ""} for c in cur]),
-                hide_index=True, use_container_width=True)
+                hide_index=True, width="stretch")
         if d["by_month"].empty:
             st.info("No injuries logged for your athletes yet.")
         else:
@@ -218,10 +218,10 @@ def render_injuries(con, user):
             st.bar_chart(pivot)
             st.dataframe(d["by_month"].rename(columns={"sport": "Sport", "month": "Month", "injuries": "Injuries",
                                                        "days_out": "Days out"}),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
             st.markdown("**Most common**")
             st.dataframe(d["body_parts"].rename(columns={"body_part": "Body part", "injuries": "Injuries"}),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
     with one:
         a = _pick_athlete(con, user, "rec_inj_pick")
         if a is None:
@@ -252,9 +252,9 @@ def _plan_view(con, aid, t, today):
     rows = []
     for d in p["days"]:
         rows.append({"Day": d["date"].strftime("%a %d %b"), "Suggestion": d["plan"],
-                     "Target (AU)": "" if d["target_load"] in (None, 0) else int(d["target_load"]),
-                     "Logged (AU)": "" if d["logged_load"] is None else int(d["logged_load"])})
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                     "Target (AU)": None if d["target_load"] in (None, 0) else int(d["target_load"]),
+                     "Logged (AU)": None if d["logged_load"] is None else int(d["logged_load"])})
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     st.caption(f"Usual week ≈ {int(p['normal_daily'] * 7)} AU. Taper week target ≈ "
                f"{int(p['normal_daily'] * 7 * p['factor'])} AU ({int(p['factor'] * 100)}%). "
                "Volume drops; intensity stays. A suggestion, not a prescription: your coach has the final say.")
@@ -287,7 +287,7 @@ def render_taper(con, user):
             "Leaves": r["depart"].strftime("%a %d %b"), "ACWR": "-" if r["acwr"] is None else round(r["acwr"], 2),
             "Zone": f"{_ZONE_ICON[r['zone']]} {r['zone']}", "Trend": _TREND[r["trend"]],
             "Cut volume to": f"{r['cut_to_pct']}%", "Rest days": r["rest_days"]} for r in rows]),
-            hide_index=True, use_container_width=True)
+            hide_index=True, width="stretch")
     a = _pick_athlete(con, user, "rec_taper_pick", "Day-by-day plan for")
     if a is None:
         return
@@ -331,7 +331,7 @@ def render_summary(con, user):
     if mode == "Everyone I can see":
         ids = auth.visible_athlete_ids(con, user)
         df = logic.summaries_table(con, ids, start, end, include_health=health)
-        st.dataframe(df, hide_index=True, use_container_width=True)
+        st.dataframe(df, hide_index=True, width="stretch")
         st.download_button("Download as CSV", df.to_csv(index=False).encode(), f"semester-summary-{start}-{end}.csv",
                            "text/csv", key="rec_sum_all_csv")
         return
@@ -350,7 +350,7 @@ def render_summary(con, user):
         st.dataframe(pd.DataFrame([{
             "Tournament": t["tournament"], "Dates": f"{t['start'].strftime('%d %b')} to {t['end'].strftime('%d %b')}",
             "Days away": t["days_away"], "Classes missed": t["classes_missed"], "Tests missed": t["tests_missed"],
-            "Letter": t["letter"]} for t in s["tournaments"]]), hide_index=True, use_container_width=True)
+            "Letter": t["letter"]} for t in s["tournaments"]]), hide_index=True, width="stretch")
     else:
         st.info("No tournaments in this period.")
     st.markdown(f"Training: {tr['minutes']} minutes in total, average weekly load {tr['avg_weekly_load']} AU"
@@ -382,7 +382,7 @@ def render_export(con, user):
     st.write(f"One .zip with a CSV per table, covering {scope}. Passwords and login sessions are never included.")
     tables = logic.export_tables(con, user)
     st.dataframe(pd.DataFrame([{"Table": k, "Rows": len(v)} for k, v in tables.items()]),
-                 hide_index=True, use_container_width=True)
+                 hide_index=True, width="stretch")
     st.download_button("Download .zip", logic.export_zip(con, user), f"planner-export-{_today()}.zip",
                        "application/zip", type="primary", key="rec_export_zip")
 
@@ -455,7 +455,7 @@ def _privacy_admin(con, user):
         cols = st.columns(4)
         for c, label in zip(cols, ["Agreed", "Not answered", "Withdrawn", "Agreed to an older notice"]):
             c.metric(label, int(counts.get(label, 0)))
-        st.dataframe(df.drop(columns=["athlete_id"]), hide_index=True, use_container_width=True)
+        st.dataframe(df.drop(columns=["athlete_id"]), hide_index=True, width="stretch")
         st.caption("Don't use data from athletes who haven't agreed in the project report.")
 
     st.subheader("Deletion requests")

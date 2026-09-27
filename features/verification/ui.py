@@ -54,7 +54,7 @@ def render_verify(con, token: str) -> None:
         df = pd.DataFrame([c.as_dict() for c in sorted(v.missed, key=lambda c: c.date)]).drop(columns=["Severity", "Tournament"])
         tests = sum(1 for c in v.missed if c.kind in ("CIE", "SEE"))
         st.caption(f"{len(v.missed)} slots, including {tests} CIE / SEE assessments needing a make-up.")
-        st.dataframe(df, hide_index=True, use_container_width=True)
+        st.dataframe(df, hide_index=True, width="stretch")
     else:
         st.caption("Nothing academic falls in this window.")
 
@@ -62,7 +62,7 @@ def render_verify(con, token: str) -> None:
     if v.decisions:
         st.dataframe(pd.DataFrame(v.decisions).rename(columns={
             "reviewer_name": "Reviewer", "reviewer_title": "As", "decision": "Decision", "note": "Note", "decided_at": "When"}),
-            hide_index=True, use_container_width=True)
+            hide_index=True, width="stretch")
 
     _decision_box(con, v)
 
@@ -103,7 +103,7 @@ def _decision_box(con, v: logic.Verification) -> None:
     note = st.text_input("Note to the student (required to reject)", key="ver_note")
     b1, b2 = st.columns(2)
     for col, decision, label, kind in ((b1, "approved", "✅ Approve", "primary"), (b2, "rejected", "❌ Reject", "secondary")):
-        if col.button(label, type=kind, use_container_width=True, key=f"ver_{decision}"):
+        if col.button(label, type=kind, width="stretch", key=f"ver_{decision}"):
             try:
                 status = logic.record_decision(con, user, aid, tid, decision, note)
             except (PermissionError, ValueError, logic.letters.LetterError) as e:
@@ -127,7 +127,7 @@ def render_decisions(con, user) -> None:
     rejected = df[df["Decision"] == "rejected"]
     if not rejected.empty:
         st.error(f"{len(rejected)} rejection(s). Read the note, fix the letter and download it again.")
-    st.dataframe(df.drop(columns=["USN"] if user.role == "athlete" else []), hide_index=True, use_container_width=True)
+    st.dataframe(df.drop(columns=["USN"] if user.role == "athlete" else []), hide_index=True, width="stretch")
 
 
 # ---------------------------------------------------------------------------
@@ -148,13 +148,13 @@ def render_department(con, user) -> None:
     k1.metric("Athletes away", df["athlete_id"].nunique())
     k2.metric("Missing a CIE / SEE", int((df["Tests missed"] != "").sum()))
     k3.metric("Letters not yet approved", int((~df["Letter status"].map(logic._norm).isin({"hodapproved", "submitted"})).sum()))
-    st.dataframe(df.drop(columns=["athlete_id", "tournament_id"]), hide_index=True, use_container_width=True)
+    st.dataframe(df.drop(columns=["athlete_id", "tournament_id"]), hide_index=True, width="stretch")
 
     st.markdown("#### Make-up tests to schedule")
     plan = logic.makeup_plan(con, ids, today, horizon)
     if plan.empty:
         st.caption("No CIE or SEE falls inside these absences.")
     else:
-        st.dataframe(plan, hide_index=True, use_container_width=True)
+        st.dataframe(plan, hide_index=True, width="stretch")
         st.download_button("⬇️ Download make-up list (.csv)", plan.to_csv(index=False).encode(),
                            file_name=f"makeup_tests_{today}.csv", mime="text/csv")
