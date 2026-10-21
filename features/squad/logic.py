@@ -305,9 +305,10 @@ def makeup_request_docx(con, request_id: int) -> bytes:
     doc.styles["Normal"].font.size = Pt(11)
     doc.add_paragraph(date.today().strftime("%d %B %Y"))
     doc.add_paragraph("To,")
-    doc.add_paragraph(tpl["letter_to"].format_map(_Blank(fill)))
+    # Make-up tests are a department matter, so this goes to the HoD, not the exemption letter's addressee.
+    doc.add_paragraph("The Head of Department, {dept}".format_map(_Blank(fill)))
     doc.add_paragraph(tpl["college_name"])
-    doc.add_paragraph(tpl["letter_through"].format_map(_Blank(fill)))
+    doc.add_paragraph("Through: Course teacher / Proctor ({proctor})".format_map(_Blank(fill)))
     p = doc.add_paragraph()
     p.add_run(f"Subject: Request for a make-up {req['kind']} for {req['title']}").bold = True
     doc.add_paragraph(tpl["letter_salutation"])
@@ -496,7 +497,7 @@ def selection_preview(con, user, tournament: dict, today: date | None = None,
         if zone == "High risk":
             flags.append("High load")
         if att is not None and att < floor:
-            flags.append("Attendance below floor")
+            flags.append(f"Attendance below {floor}%")
         rows.append({"athlete_id": aid, "Entered": aid in entered, "Athlete": a["name"], "USN": a["usn"],
                      "Dept": a["dept"], "Sem": a["sem"], "SEE": s["SEE"], "CIE": s["CIE"], "Labs": s["lab"],
                      "Classes": s["class"],
@@ -549,7 +550,8 @@ def create_with_selection(con, user, name, sport, venue, start, end, travel_befo
 # ---------------------------------------------------------------------------
 
 SEMESTER_DAYS = 120
-ON_DUTY_STAGES = ("hod_approved", "submitted")
+# Attendance is compensated once the Dean of Student Affairs has given permission.
+ON_DUTY_STAGES = ("submitted",)
 
 
 def semester_window(con, today: date | None = None) -> tuple[date, date, bool]:
@@ -595,12 +597,12 @@ def attendance_projection(con, athlete_id: int, today: date | None = None, extra
                           other_absence_pct: float = 0, all_on_duty: bool = False) -> dict:
     """
     Projected end-of-semester attendance per timetable subject. A class is lost to sport when it falls
-    on a day away. If settings say on-duty counts as present, days with an approved letter (HoD approved
-    or submitted) are given back, up to the on-duty cap, earliest first. other_absence_pct is an
+    on a day away. If settings say on-duty counts as present, days with a Dean-approved letter
+    are given back, up to the on-duty cap, earliest first. other_absence_pct is an
     allowance for ordinary absences on top. extra_windows adds hypothetical trips (squad preview).
     """
     start, end, known = semester_window(con, today)
-    floor = settings.get(con, "attendance_min_pct")
+    floor, relaxed = settings.attendance_floors(con)
     od_counts = settings.get(con, "on_duty_counts_as_present")
     cap = settings.get(con, "max_on_duty_days")
     away = _sport_days(con, athlete_id, start, end, extra_windows, all_on_duty)
@@ -636,21 +638,33 @@ def attendance_projection(con, athlete_id: int, today: date | None = None, extra
         subjects.append({"subject": sub, "held": n, "sport_missed": lost.get(sub, 0),
                          "on_duty": back.get(sub, 0), "pct": round(max(pct, 0.0), 1)})
     subjects.sort(key=lambda s: (s["pct"], s["subject"]))
-    return {"start": start, "end": end, "dates_known": known, "floor": floor, "subjects": subjects,
+    return {"start": start, "end": end, "dates_known": known, "floor": floor, "relaxed": relaxed, "subjects": subjects,
             "worst": subjects[0] if subjects else None, "sport_days": len(away),
             "on_duty_days": len(credited), "uncovered_days": len(away) - len(credited)}
+
+
+def attendance_band(pct: float, floor: float, relaxed: float, margin: float = 5) -> str:
+    """Status words for one percentage under the two-floor rule (e.g. 85% required, 75% with a valid reason)."""
+    if pct < relaxed:
+        return f"Below {relaxed:g}%"
+    if pct < floor:
+        return f"Below {floor:g}%"
+    if pct < floor + margin:
+        return f"Near {floor:g}%"
+    return "OK"
 
 
 def attendance_risk(con, user, today: date | None = None, margin: float = 5, other_absence_pct: float = 0,
                     only_at_risk: bool = False) -> pd.DataFrame:
     """
     One row per visible athlete: worst subject's projected attendance, and what it would be if every
-    sport absence had an approved letter. Status is Below floor / Near floor (within margin) / OK.
+    sport absence had a Dean-approved letter. Status (attendance_band) is Below <relaxed>% (no relaxation
+    left), Below <required>% (shortfall needs the Dean's permission), Near <required>% (within margin) or OK.
     """
     cols = ["athlete_id", "Athlete", "USN", "Sport", "Dept", "Sem", "Worst subject", "Classes held",
             "Missed for sport", "Given back (on-duty)", "Projected (%)", "With all letters approved (%)",
             "Status", "What to do"]
-    floor = settings.get(con, "attendance_min_pct")
+    floor, relaxed = settings.attendance_floors(con)
     od_counts = settings.get(con, "on_duty_counts_as_present")
     rows = []
     for aid in auth.visible_athlete_ids(con, user):
@@ -659,15 +673,19 @@ def attendance_risk(con, user, today: date | None = None, margin: float = 5, oth
         if w is None or p["sport_days"] == 0:
             continue
         best = attendance_projection(con, aid, today, other_absence_pct=other_absence_pct, all_on_duty=True)["worst"]
-        status = "Below floor" if w["pct"] < floor else "Near floor" if w["pct"] < floor + margin else "OK"
+        status = attendance_band(w["pct"], floor, relaxed, margin)
+        letters_help = od_counts and p["uncovered_days"]
         if status == "OK":
             todo = "-"
-        elif od_counts and p["uncovered_days"] and best["pct"] >= floor:
-            todo = "Get the pending exemption letters approved"
-        elif od_counts and p["uncovered_days"]:
-            todo = "Letters help but aren't enough: limit further sport absences"
+        elif letters_help and best["pct"] >= floor:
+            todo = "Get the pending letters approved by the Dean of Student Affairs"
+        elif letters_help and best["pct"] >= relaxed:
+            todo = (f"Get the pending letters approved; the rest of the shortfall below {floor}% "
+                    "needs the Dean's permission")
+        elif w["pct"] >= relaxed:
+            todo = f"Below {floor}% needs the Dean's permission: limit further absences"
         else:
-            todo = "Limit further sport absences and talk to the proctor"
+            todo = f"Below even {relaxed}%: no relaxation applies. Stop further absences and see the proctor"
         a = data.athlete(con, aid)
         rows.append({"athlete_id": aid, "Athlete": a["name"], "USN": a["usn"], "Sport": a["sport"], "Dept": a["dept"],
                      "Sem": a["sem"], "Worst subject": w["subject"], "Classes held": w["held"],

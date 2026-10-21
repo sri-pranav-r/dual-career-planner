@@ -240,7 +240,10 @@ def test_semester_summary_shows_letter_stage(con):
     for _ in range(3):
         letters.advance_letter(con, lid)
     s = logic.semester_summary(con, a, T - timedelta(days=10), T + timedelta(days=60), today=T)
-    assert s["tournaments"][0]["letter"] == "HoD approved" and s["totals"]["letters_approved"] == 1
+    assert s["tournaments"][0]["letter"] == "HoD approved" and s["totals"]["letters_approved"] == 0
+    letters.advance_letter(con, lid)                     # the Dean approves
+    s = logic.semester_summary(con, a, T - timedelta(days=10), T + timedelta(days=60), today=T)
+    assert s["tournaments"][0]["letter"] == "Dean approved" and s["totals"]["letters_approved"] == 1
 
 
 # ----------------------------------------------------------------- export

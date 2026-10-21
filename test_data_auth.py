@@ -296,3 +296,28 @@ def test_letter_uses_admin_wording(con):
     assert "The Dean of Student Affairs, CSE" in text
     assert "Sports Officer: ___" in text and "Head of Department:" not in text
     assert f"Please grant OD for {t['name']}. __________" in text
+
+
+def test_attendance_and_addressee_settings(con):
+    import settings
+    assert settings.get(con, "attendance_min_pct") == 85
+    assert settings.get(con, "attendance_relaxed_pct") == 75
+    assert settings.get(con, "letter_addressee") == "Dean of Student Affairs"
+    settings.set(con, "letter_addressee", "Principal")
+    assert settings.letter_template(con)["letter_addressee"] == "Principal"
+    with pytest.raises(ValueError):
+        settings.set(con, "letter_addressee", "Registrar")
+    with pytest.raises(ValueError):
+        settings.set(con, "attendance_relaxed_pct", 101)
+
+
+def test_email_version_uses_admin_wording(con):
+    import letterdoc
+    import settings
+    settings.set(con, "letter_addressee", "Principal")
+    settings.set(con, "college_name", "Test College")
+    a = data.athlete_by_usn(con, "1RV25CS012")
+    t = data.tournaments_for(con, int(a["id"])).iloc[0].to_dict()
+    m = letterdoc.make_email(con, a, t)
+    assert m["to"] == "The Principal, Test College"
+    assert t["name"] in m["subject"] and a["name"] in m["body"]

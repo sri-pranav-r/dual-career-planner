@@ -11,10 +11,22 @@ import data
 import settings
 
 
+def _clashes(con, athlete, tournament, clashes):
+    if clashes is None:
+        aid = int(athlete["id"])
+        clashes = core.find_clashes(tournament, data.timetable(con, aid), data.events(con, aid))
+    return clashes
+
+
+def make_email(con, athlete: dict, tournament: dict, clashes=None) -> dict:
+    """The same request as an email ({to, cc, subject, body}); the college accepts either."""
+    return core.build_letter_email(athlete, tournament, _clashes(con, athlete, tournament, clashes),
+                                   template=settings.letter_template(con))
+
+
 def make_letter(con, athlete: dict, tournament: dict, clashes=None) -> bytes:
     aid, tid = int(athlete["id"]), int(tournament["id"])
-    if clashes is None:
-        clashes = core.find_clashes(tournament, data.timetable(con, aid), data.events(con, aid))
+    clashes = _clashes(con, athlete, tournament, clashes)
     docx = core.build_letter_docx(athlete, tournament, clashes, template=settings.letter_template(con))
     try:
         verification = importlib.import_module("features.verification.logic")

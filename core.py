@@ -156,17 +156,26 @@ def acwr_zone(ratio: float | None) -> tuple[str, str]:
 # 3. Exemption letter
 # ---------------------------------------------------------------------------
 
+# The college's rule: leave to represent the college outside (tournaments, hackathons and the like) is
+# granted by the Dean of Student Affairs, with a letter to the Dean (or the Principal) copied to the
+# student's faculty, so the absence is compensated. An email with the same text is also accepted.
+ADDRESSEES = ("Dean of Student Affairs", "Principal")
+
 DEFAULT_LETTER = {
     "college_name": "Your College",
-    "letter_to": "The Head of Department, {dept}",
-    "letter_through": "Through: Class teacher / Proctor ({proctor}) and the Physical Education Director",
-    "letter_subject": "Request for attendance exemption and make-up assessment for participation in {tournament}",
+    "letter_addressee": ADDRESSEES[0],
+    "letter_to": "The {addressee}",
+    "letter_through": "",
+    "letter_subject": "Request for permission and attendance compensation for representing the college at {tournament}",
     "letter_salutation": "Respected Sir/Madam,",
-    "letter_request": ("I request that the above absence be treated as on-duty for attendance purposes as per the "
-                       "college sports policy, and that I be permitted to take make-up assessments for any CIE or "
-                       "lab missed. The selection letter from the Physical Education Department is attached."),
+    "letter_request": ("I kindly request you to grant me permission for this leave and to compensate my attendance "
+                       "for the classes missed during this period. I also request that I be permitted to take "
+                       "make-up assessments for any CIE or lab missed. The selection letter from the Physical "
+                       "Education Department is attached."),
     "letter_closing": "Thanking you,",
-    "letter_signatures": "Physical Education Director | Class teacher / Proctor | Head of Department",
+    "letter_signatures": "Physical Education Director | {addressee}",
+    "letter_cc": ("Class teacher / Proctor ({proctor}); Head of Department, {dept}; "
+                  "Physical Education Director"),
 }
 
 
@@ -183,24 +192,51 @@ def _fill(text: str, values: dict) -> str:
         return text
 
 
-def build_letter_docx(athlete: dict, tournament: dict, clashes: list[Clash], college: str | None = None,
-                      template: dict | None = None) -> bytes:
+def letter_parts(athlete: dict, tournament: dict, clashes: list[Clash], college: str | None = None,
+                 template: dict | None = None) -> dict:
     """
-    Return a .docx as bytes. Requires python-docx.
+    The letter's text with every placeholder filled, shared by the Word letter and the email version.
     `template` overrides DEFAULT_LETTER wording (see settings.letter_template); text may use
-    {name} {usn} {dept} {sem} {sport} {proctor} {tournament} {venue} placeholders.
+    {name} {usn} {dept} {sem} {sport} {proctor} {tournament} {venue} {college} {addressee} placeholders.
     """
-    from docx import Document
-    from docx.shared import Pt
-
     t = {**DEFAULT_LETTER, **(template or {})}
     if college:
         t["college_name"] = college
     values = {"name": athlete.get("name"), "usn": athlete.get("usn"), "dept": athlete.get("dept"),
               "sem": athlete.get("sem"), "sport": athlete.get("sport"),
               "proctor": athlete.get("proctor") or "__________", "tournament": tournament["name"],
-              "venue": tournament.get("venue") or "________", "college": t["college_name"]}
+              "venue": tournament.get("venue") or "________", "college": t["college_name"],
+              "addressee": t["letter_addressee"] or ADDRESSEES[0]}
+    first, last = away_window(tournament)
+    return {
+        "college": t["college_name"],
+        "addressee": values["addressee"],
+        "to": _fill(t["letter_to"], values),
+        "through": _fill(t["letter_through"], values).strip(),
+        "subject": _fill(t["letter_subject"], values),
+        "salutation": _fill(t["letter_salutation"], values),
+        "intro": (f"I, {athlete['name']} (USN {athlete['usn']}), a {athlete['sem']} semester student of "
+                  f"{athlete['dept']}, have been selected to represent the college in {athlete['sport']} at "
+                  f"{tournament['name']} held at {values['venue']} from "
+                  f"{tournament['start_date'].strftime('%d %b %Y')} to {tournament['end_date'].strftime('%d %b %Y')}. "
+                  f"Including travel, I will be away from {first.strftime('%d %b %Y')} to "
+                  f"{last.strftime('%d %b %Y')}."),
+        "missed": [(c.date.strftime("%d %b %Y (%a)"), c.kind, c.title) for c in sorted(clashes, key=lambda c: c.date)],
+        "request": _fill(t["letter_request"], values),
+        "closing": _fill(t["letter_closing"], values),
+        "sender": [athlete["name"], f"USN: {athlete['usn']}", f"Phone: {athlete.get('phone') or '__________'}"],
+        "signatures": [_fill(x.strip(), values) for x in t["letter_signatures"].split("|") if x.strip()],
+        "cc": [x.strip() for x in _fill(t["letter_cc"], values).split(";") if x.strip()],
+    }
 
+
+def build_letter_docx(athlete: dict, tournament: dict, clashes: list[Clash], college: str | None = None,
+                      template: dict | None = None) -> bytes:
+    """Return the letter as a .docx (bytes). Requires python-docx. Wording as in letter_parts."""
+    from docx import Document
+    from docx.shared import Pt
+
+    p_ = letter_parts(athlete, tournament, clashes, college, template)
     doc = Document()
     style = doc.styles["Normal"]
     style.font.name = "Calibri"
@@ -209,44 +245,55 @@ def build_letter_docx(athlete: dict, tournament: dict, clashes: list[Clash], col
     doc.add_paragraph(date.today().strftime("%d %B %Y"))
     doc.add_paragraph("")
     doc.add_paragraph("To,")
-    doc.add_paragraph(_fill(t["letter_to"], values))
-    doc.add_paragraph(t["college_name"])
+    doc.add_paragraph(p_["to"])
+    doc.add_paragraph(p_["college"])
     doc.add_paragraph("")
-    if t["letter_through"].strip():
-        doc.add_paragraph(_fill(t["letter_through"], values))
+    if p_["through"]:
+        doc.add_paragraph(p_["through"])
         doc.add_paragraph("")
     p = doc.add_paragraph()
-    p.add_run("Subject: " + _fill(t["letter_subject"], values)).bold = True
+    p.add_run("Subject: " + p_["subject"]).bold = True
     doc.add_paragraph("")
-    doc.add_paragraph(_fill(t["letter_salutation"], values))
-    first, last = away_window(tournament)
-    doc.add_paragraph(
-        f"I, {athlete['name']} (USN {athlete['usn']}), a {athlete['sem']} semester student of {athlete['dept']}, "
-        f"have been selected to represent the college in {athlete['sport']} at {tournament['name']} "
-        f"held at {values['venue']} from {tournament['start_date'].strftime('%d %b %Y')} "
-        f"to {tournament['end_date'].strftime('%d %b %Y')}. Including travel, I will be away from "
-        f"{first.strftime('%d %b %Y')} to {last.strftime('%d %b %Y')}."
-    )
+    doc.add_paragraph(p_["salutation"])
+    doc.add_paragraph(p_["intro"])
     doc.add_paragraph("During this period I will miss the following:")
     tbl = doc.add_table(rows=1, cols=3)
     tbl.style = "Table Grid"
     hdr = tbl.rows[0].cells
     hdr[0].text, hdr[1].text, hdr[2].text = "Date", "Type", "Subject / Assessment"
-    for c in sorted(clashes, key=lambda c: c.date):
+    for when, kind, title in p_["missed"]:
         row = tbl.add_row().cells
-        row[0].text = c.date.strftime("%d %b %Y (%a)")
-        row[1].text = c.kind
-        row[2].text = c.title
+        row[0].text, row[1].text, row[2].text = when, kind, title
     doc.add_paragraph("")
-    doc.add_paragraph(_fill(t["letter_request"], values))
+    doc.add_paragraph(p_["request"])
     doc.add_paragraph("")
-    doc.add_paragraph(_fill(t["letter_closing"], values))
+    doc.add_paragraph(p_["closing"])
     doc.add_paragraph("")
-    doc.add_paragraph(f"{athlete['name']}\nUSN: {athlete['usn']}\nPhone: {athlete.get('phone') or '__________'}")
-    for sig in [x.strip() for x in t["letter_signatures"].split("|") if x.strip()]:
+    doc.add_paragraph("\n".join(p_["sender"]))
+    for sig in p_["signatures"]:
         doc.add_paragraph("")
         doc.add_paragraph(f"{sig}: ______________________")
+    if p_["cc"]:
+        doc.add_paragraph("")
+        doc.add_paragraph("Copy to:")
+        for i, who in enumerate(p_["cc"], 1):
+            doc.add_paragraph(f"{i}. {who}")
 
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def build_letter_email(athlete: dict, tournament: dict, clashes: list[Clash], college: str | None = None,
+                       template: dict | None = None) -> dict:
+    """The same letter as an email: {"to", "cc", "subject", "body"} as plain text, ready to copy."""
+    p_ = letter_parts(athlete, tournament, clashes, college, template)
+    missed = [f"- {when}: {kind}, {title}" for when, kind, title in p_["missed"]] or ["- No classes or tests"]
+    body = "\n".join([
+        p_["salutation"], "",
+        p_["intro"], "",
+        "During this period I will miss the following:", *missed, "",
+        p_["request"], "",
+        p_["closing"], "", *p_["sender"], p_["college"],
+    ])
+    return {"to": f"{p_['to']}, {p_['college']}", "cc": "; ".join(p_["cc"]), "subject": p_["subject"], "body": body}

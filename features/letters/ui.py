@@ -23,11 +23,12 @@ def _stepper(stage: str | None) -> str:
 def _waiting_on(stage: str | None) -> str:
     return {
         None: "you: download the letter from the Exemption letter tab",
-        "drafted": "the Physical Education Director's signature",
+        "drafted": "the Physical Education Director to confirm your selection",
         "ped_signed": "your proctor or class teacher's signature",
         "proctor_signed": "the HoD's approval",
-        "hod_approved": "you: hand it in at the department office, then mark it submitted",
-        "submitted": "nothing, all done",
+        "hod_approved": ("you: meet the Dean of Student Affairs with the signed letter (or email it, copying your "
+                         "faculty), then mark it Dean approved once permission is given"),
+        "submitted": "nothing, all done. The Dean has approved it, so these days count towards attendance",
     }[stage]
 
 
@@ -83,7 +84,7 @@ def _athlete_status(con, user):
                     logic.create_letter(con, aid, r["tournament_id"], by=user.name)
                     st.rerun()
             elif r["stage"] == "hod_approved":
-                if c1.button("Mark as submitted", key=f"sub_{r['letter_id']}", type="primary"):
+                if c1.button("Mark Dean approved", key=f"sub_{r['letter_id']}", type="primary"):
                     logic.advance_as(con, user, r["letter_id"])
                     st.rerun()
             if r["letter_id"]:

@@ -81,7 +81,7 @@ def test_verify_shows_live_ped_data(con):
     assert v.valid and v.entered and v.ped_confirmed and not v.dates_changed
     assert v.approvable and v.warnings == []
     assert any(c.kind == "CIE" for c in v.missed)
-    assert v.status == "PED signed"
+    assert v.status == "PED confirmed"
 
 
 def test_verify_flags_moved_dates_and_removed_entry(con):

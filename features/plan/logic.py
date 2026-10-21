@@ -171,7 +171,7 @@ def attendance_status(con, athlete_id, today: date) -> dict | None:
     floor = p["floor"]
     margin = RULES["P8"]["margin"]
     risk = "high" if w["pct"] < floor else "moderate" if w["pct"] < floor + margin else "low"
-    return {"subject": w["subject"], "pct": w["pct"], "floor": floor, "risk": risk,
+    return {"subject": w["subject"], "pct": w["pct"], "floor": floor, "relaxed": p.get("relaxed", floor), "risk": risk,
             "uncovered_days": p["uncovered_days"], "dates_known": p["dates_known"]}
 
 

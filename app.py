@@ -231,7 +231,8 @@ def athlete_attention(athlete, s):
     attn = feature_call("plan", "logic", "attendance_status", con, aid, today)
     if attn and attn["risk"] == "high":
         items.append(("red", f"Attendance in **{attn['subject']}** could drop to {attn['pct']:.0f}% "
-                             f"(minimum {attn['floor']}%).", "attendance"))
+                             f"(required {attn['floor']}%, {attn['relaxed']}% only with the Dean's permission).",
+                      "attendance"))
     open_tests = [t for t in feature_call("squad", "logic", "missed_tests", con, aid) or []
                   if t["request"] is None and t["test_date"] >= today - timedelta(days=30)]
     if open_tests:
@@ -305,8 +306,10 @@ def part_clashes(athlete, s=None):
 def part_letter(athlete, s=None, read_only=False):
     aid = int(athlete["id"])
     s = s or athlete_summary(aid)
-    st.caption("Pre-filled from the profile and the clash list. Download it, get the PED's signature, then the "
-               "proctor and HoD sign by scanning its QR code.")
+    to = settings.get(con, "letter_addressee")
+    st.caption(f"A request to the {to} for permission and attendance compensation, copied to your faculty. "
+               "Pre-filled from the profile and the clash list. Download it, get the PED to confirm, the proctor and "
+               f"HoD sign by scanning its QR code, then meet the {to}. You can also send it as an email.")
     up = core.upcoming(s["tours"], today)
     if up.empty:
         st.info("No upcoming tournament to write a letter for.")
@@ -330,6 +333,12 @@ def part_letter(athlete, s=None, read_only=False):
                        kwargs=None if read_only else {"by": user.name})
     if not read_only:
         st.caption("Downloading starts tracking the letter. Follow its signatures on the Sign-off progress tab.")
+    mail = letterdoc.make_email(con, athlete, t, cl)
+    with st.expander("Email version (same text, to copy)", icon=":material/mail:"):
+        st.caption("An email to the addressee with your faculty in copy is accepted too. Use the copy icon on each box.")
+        st.markdown(f"**To:** {mail['to']}  \n**Cc:** {mail['cc']}")
+        st.code(mail["subject"], language=None)
+        st.code(mail["body"], language=None, wrap_lines=True)
 
 
 def part_load(athlete, s=None):
@@ -657,12 +666,16 @@ def render_users():
 
 def render_settings():
     st.subheader("College rules")
-    st.caption("Placeholders until the department confirms them. Other screens (attendance risk, letters) read these.")
+    st.caption("Set to the college's rule: 85% attendance is required, and with a valid reason (sport, hackathons, "
+               "other approved leave) the Dean of Student Affairs can accept down to 75%. Attendance risk and the "
+               "letters read these.")
     cur = settings.all(con)
     with st.form("rules"):
         c1, c2 = st.columns(2)
         pct = c1.number_input(settings.LABELS["attendance_min_pct"], 0, 100, int(cur["attendance_min_pct"]))
-        cap = c2.number_input(settings.LABELS["max_on_duty_days"], 0, 180, int(cur["max_on_duty_days"]))
+        relaxed = c2.number_input(settings.LABELS["attendance_relaxed_pct"], 0, 100, int(cur["attendance_relaxed_pct"]),
+                                  help="Accepted only with the Dean's permission. Below this no relaxation applies.")
+        cap = c1.number_input(settings.LABELS["max_on_duty_days"], 0, 180, int(cur["max_on_duty_days"]))
         od = st.checkbox(settings.LABELS["on_duty_counts_as_present"], bool(cur["on_duty_counts_as_present"]))
         c3, c4 = st.columns(2)
         s_start = c3.date_input(settings.LABELS["semester_start"],
@@ -672,23 +685,30 @@ def render_settings():
         if st.form_submit_button("Save rules"):
             if s_start and s_end and s_end < s_start:
                 st.error("Semester end is before its start.")
+            elif relaxed > pct:
+                st.error("The relaxed attendance can't be above the required attendance.")
             else:
-                for k, v in [("attendance_min_pct", pct), ("max_on_duty_days", cap), ("on_duty_counts_as_present", od),
+                for k, v in [("attendance_min_pct", pct), ("attendance_relaxed_pct", relaxed), ("max_on_duty_days", cap), ("on_duty_counts_as_present", od),
                              ("semester_start", s_start.isoformat() if s_start else ""),
                              ("semester_end", s_end.isoformat() if s_end else "")]:
                     settings.set(con, k, v)
                 st.success("Saved.")
 
     st.subheader("Exemption letter wording")
-    st.caption("You can use {name} {usn} {dept} {sem} {sport} {proctor} {tournament} {venue}. "
-               "The student details, dates and the table of missed classes are filled in automatically.")
+    st.caption("You can use {name} {usn} {dept} {sem} {sport} {proctor} {tournament} {venue} {addressee}. "
+               "The student details, dates and the table of missed classes are filled in automatically. "
+               "The same wording is offered as an email.")
     with st.form("letter"):
         vals = {"college_name": st.text_input(settings.LABELS["college_name"], cur["college_name"])}
+        vals["letter_addressee"] = st.radio(settings.LABELS["letter_addressee"], core.ADDRESSEES, horizontal=True,
+                                            index=core.ADDRESSEES.index(cur["letter_addressee"])
+                                            if cur["letter_addressee"] in core.ADDRESSEES else 0)
         for k in ("letter_to", "letter_through", "letter_subject", "letter_salutation"):
             vals[k] = st.text_input(settings.LABELS[k], cur[k])
         vals["letter_request"] = st.text_area(settings.LABELS["letter_request"], cur["letter_request"], height=120)
         vals["letter_closing"] = st.text_input(settings.LABELS["letter_closing"], cur["letter_closing"])
         vals["letter_signatures"] = st.text_input(settings.LABELS["letter_signatures"], cur["letter_signatures"])
+        vals["letter_cc"] = st.text_input(settings.LABELS["letter_cc"], cur["letter_cc"])
         a, b = st.columns(2)
         if a.form_submit_button("Save wording"):
             for k, v in vals.items():
@@ -902,7 +922,10 @@ def part_help():
         "1.3 to 1.5 caution, 0.8 to 1.3 the sweet spot, and below 0.8 under-trained.\n"
         "- A **clash** is any timetable slot or CIE / SEE / lab date inside a tournament's window, travel days "
         "included.\n"
-        f"- **Attendance risk** uses the college minimum ({settings.get(con, 'attendance_min_pct')}%), the on-duty "
+        f"- **Attendance**: {settings.get(con, 'attendance_min_pct')}% is required. With a valid reason (sport, "
+        f"hackathons, other approved leave) the Dean of Student Affairs can accept down to "
+        f"{settings.get(con, 'attendance_relaxed_pct')}%, on a letter or email to the Dean copied to your faculty. "
+        "Sport days count as present once the Dean has approved the letter. Attendance risk also uses the on-duty "
         "rule and the semester dates set by the admin in Settings.")
     st.markdown("#### Who sees what")
     st.markdown(

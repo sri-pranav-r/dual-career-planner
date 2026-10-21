@@ -2,8 +2,10 @@
 College rules and letter wording, editable by admins (Settings tab) and
 stored in the core `meta` table under "setting.<key>".
 
-Defaults are placeholders until the college confirms its attendance rule
-and letter format; change them in the app, not in code.
+Defaults follow the college's rule: 85% attendance is mandatory, and a shortfall
+for a valid reason (sport, hackathons, other approved leave) can be accepted down
+to 75%. Leave to represent the college is granted by the Dean of Student Affairs
+on a letter (or email) copied to the student's faculty. Change them in the app.
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ import data
 DEFAULTS: dict = {
     # attendance
     "attendance_min_pct": 85,
+    "attendance_relaxed_pct": 75,     # lowest allowed with a valid reason (Dean's permission)
     "on_duty_counts_as_present": True,
     "max_on_duty_days": 0,            # 0 = no cap
     "semester_start": "",             # ISO date; "" = unknown
@@ -28,19 +31,22 @@ DEFAULTS: dict = {
 }
 
 LABELS = {
-    "attendance_min_pct": "Minimum attendance (%)",
+    "attendance_min_pct": "Required attendance (%)",
+    "attendance_relaxed_pct": "Lowest attendance allowed with a valid reason (%)",
     "on_duty_counts_as_present": "Approved sport absences count as present (on-duty)",
     "max_on_duty_days": "Maximum on-duty days per semester (0 = no limit)",
     "semester_start": "Semester start date",
     "semester_end": "Semester end date",
     "college_name": "College name",
+    "letter_addressee": "Letter goes to",
     "letter_to": "Addressed to",
-    "letter_through": "Through line",
+    "letter_through": "Through line (optional)",
     "letter_subject": "Subject line",
     "letter_salutation": "Salutation",
     "letter_request": "Request paragraph",
     "letter_closing": "Closing",
     "letter_signatures": "Signature lines (separate with |)",
+    "letter_cc": "Copy to (separate with ;)",
     "base_url": "App address for QR codes and links",
 }
 
@@ -62,17 +68,25 @@ def set(con, key, value):  # noqa: A001 - mirrors get()
         value = bool(value)
     elif isinstance(default, int):
         value = int(value)
-        if key == "attendance_min_pct" and not 0 <= value <= 100:
+        if key in ("attendance_min_pct", "attendance_relaxed_pct") and not 0 <= value <= 100:
             raise ValueError("Attendance must be between 0 and 100.")
         if value < 0:
             raise ValueError(f"{LABELS[key]} can't be negative.")
     else:
         value = str(value).strip()
+        if key == "letter_addressee" and value not in core.ADDRESSEES:
+            raise ValueError(f"The letter goes to one of: {', '.join(core.ADDRESSEES)}.")
     data.set_meta(con, f"setting.{key}", json.dumps(value))
 
 
 def all(con) -> dict:  # noqa: A001
     return {k: get(con, k) for k in DEFAULTS}
+
+
+def attendance_floors(con) -> tuple[int, int]:
+    """(required, relaxed). The relaxed floor never sits above the required one."""
+    required = get(con, "attendance_min_pct")
+    return required, min(get(con, "attendance_relaxed_pct"), required)
 
 
 def letter_template(con) -> dict:

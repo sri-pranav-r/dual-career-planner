@@ -172,9 +172,10 @@ def _letter_line(con, aid, tid, link) -> str:
     if letter.get("needs_redo"):
         return f"The dates changed, so your letter needs redoing.{link}"
     if letter["stage"] == "submitted":
-        return "Your letter is submitted. Nothing to do."
+        return "The Dean has approved your letter. Nothing to do."
     if letter["stage"] == "hod_approved":
-        return "Your letter is approved. Hand it in at the department office and mark it submitted."
+        return ("Your letter is signed. Take it to the Dean of Student Affairs (or email it, copying your faculty) "
+                "and mark it Dean approved once permission is given.")
     return f"Your letter is at: {letters.STAGE_LABELS.get(letter['stage'], letter['stage'])}. Chase the next signature."
 
 

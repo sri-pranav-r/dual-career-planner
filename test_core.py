@@ -82,3 +82,46 @@ if __name__ == "__main__":
     for f in fns:
         f(); print("ok", f.__name__)
     print(f"{len(fns)} tests passed")
+
+
+def _letter_inputs():
+    a = {"name": "A", "usn": "1XX25CS001", "dept": "CSE", "sem": "3rd", "sport": "Cricket", "proctor": "Dr P"}
+    t = {"name": "Zonal Cup", "venue": "X", "start_date": date(2026, 10, 5), "end_date": date(2026, 10, 6),
+         "travel_before": 0, "travel_after": 0}
+    cl = [core.Clash(date(2026, 10, 5), "CIE", "Maths CIE 2", "Zonal Cup", core.SEVERITY["CIE"])]
+    return a, t, cl
+
+
+def test_default_letter_goes_to_the_dean_and_copies_faculty():
+    import io
+    from docx import Document
+    a, t, cl = _letter_inputs()
+    doc = Document(io.BytesIO(core.build_letter_docx(a, t, cl)))
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "The Dean of Student Affairs\nYour College" in text
+    assert "permission and attendance compensation" in text
+    assert "compensate my attendance" in text
+    assert "Copy to:" in text and "Class teacher / Proctor (Dr P)" in text and "Head of Department, CSE" in text
+    assert "Dean of Student Affairs: ___" in text and "Through:" not in text
+    assert doc.tables[0].rows[1].cells[2].text == "Maths CIE 2"
+
+
+def test_principal_can_be_the_addressee():
+    import io
+    from docx import Document
+    a, t, cl = _letter_inputs()
+    b = core.build_letter_docx(a, t, cl, template={"letter_addressee": "Principal"})
+    text = "\n".join(p.text for p in Document(io.BytesIO(b)).paragraphs)
+    assert "The Principal" in text and "Principal: ___" in text and "Dean" not in text
+
+
+def test_email_version_matches_the_letter():
+    a, t, cl = _letter_inputs()
+    m = core.build_letter_email(a, t, cl)
+    assert m["to"] == "The Dean of Student Affairs, Your College"
+    assert "Head of Department, CSE" in m["cc"] and "Physical Education Director" in m["cc"]
+    assert m["subject"].startswith("Request for permission and attendance compensation") and "Zonal Cup" in m["subject"]
+    assert m["body"].startswith("Respected Sir/Madam,")
+    assert "- 05 Oct 2026 (Mon): CIE, Maths CIE 2" in m["body"]
+    assert "compensate my attendance" in m["body"] and "USN: 1XX25CS001" in m["body"]
+    assert "{" not in m["body"] + m["subject"] + m["cc"]

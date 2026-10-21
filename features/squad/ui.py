@@ -254,33 +254,45 @@ def render_bulk_letters(con, user):
 
 # ----------------------------------------------------------------- tab: Attendance risk
 
+def _rule_explainer(floor, relaxed):
+    st.info(f"**How the attendance rule works.** {floor}% attendance in every subject is mandatory. If you miss "
+            f"classes for a valid reason, such as representing the college at a tournament or hackathon or other "
+            f"approved leave, the Dean of Student Affairs can accept attendance down to **{relaxed}%**. That needs "
+            f"the Dean's permission and a letter (or email) to the Dean, copied to your faculty, so the absence is "
+            f"compensated. Below {relaxed}% no relaxation applies.", icon=":material/info:")
+
+
 def render_attendance(con, user):
-    floor = settings.get(con, "attendance_min_pct")
+    floor, relaxed = settings.attendance_floors(con)
     start, end, known = logic.semester_window(con, date.today())
     if user.role == "athlete":
-        _athlete_attendance(con, user, floor, start, end, known)
+        _athlete_attendance(con, user, floor, relaxed, start, end, known)
         return
     st.subheader("Attendance risk from sport absences")
+    _rule_explainer(floor, relaxed)
     st.caption(f"Projected end-of-semester attendance in each athlete's worst subject once tournament days are "
-               f"taken out. Floor: {floor}%. Semester {start:%d %b} to {end:%d %b %Y}."
+               f"taken out. Required {floor}%, {relaxed}% with the Dean's permission. "
+               f"Semester {start:%d %b} to {end:%d %b %Y}."
                + ("" if known else " These dates are a guess until the admin sets them in Settings.")
-               + (" Absences with an HoD-approved letter count as present." if settings.get(con, "on_duty_counts_as_present")
+               + (" Absences with a Dean-approved letter count as present." if settings.get(con, "on_duty_counts_as_present")
                   else " Sport absences count as absent even with a letter."))
     c1, c2, c3 = st.columns(3)
-    margin = c1.slider("Warn within (points of the floor)", 0, 15, 5, key="att_margin")
+    margin = c1.slider(f"Warn within (points above {floor}%)", 0, 15, 5, key="att_margin")
     other = c2.slider("Allow for other absences (%)", 0, 20, 5, key="att_other",
                       help="The planner only knows sport absences. This adds an allowance for illness and the rest.")
     only = c3.toggle("Only athletes at risk", value=True, key="att_only")
     df = logic.attendance_risk(con, user, date.today(), margin=margin, other_absence_pct=other, only_at_risk=only)
     if df.empty:
-        st.success("Nobody is near the attendance floor." if only else "No sport absences this semester.")
+        st.success(f"Nobody is near {floor}%." if only else "No sport absences this semester.")
         return
-    k1, k2 = st.columns(2)
-    k1.metric("Below the floor", int((df["Status"] == "Below floor").sum()))
-    k2.metric("Near the floor", int((df["Status"] == "Near floor").sum()))
+    below_relaxed, below_floor, near = f"Below {relaxed}%", f"Below {floor}%", f"Near {floor}%"
+    k1, k2, k3 = st.columns(3)
+    k1.metric(f"Below {relaxed}% (no relaxation)", int((df["Status"] == below_relaxed).sum()))
+    k2.metric(f"{relaxed} to {floor}% (needs the Dean)", int((df["Status"] == below_floor).sum()))
+    k3.metric(f"Near {floor}%", int((df["Status"] == near).sum()))
 
     def colour(row):
-        c = {"Below floor": "#fde2e2", "Near floor": "#fff4d6"}.get(row["Status"], "")
+        c = {below_relaxed: "#fde2e2", below_floor: "#ffe8cc", near: "#fff4d6"}.get(row["Status"], "")
         return [f"background-color: {c}" if c else ""] * len(row)
 
     show = df.drop(columns=["athlete_id"])
@@ -291,10 +303,11 @@ def render_attendance(con, user):
                        mime="text/csv", key="att_csv")
 
 
-def _athlete_attendance(con, user, floor, start, end, known):
+def _athlete_attendance(con, user, floor, relaxed, start, end, known):
     st.subheader("Your attendance after sport absences")
     p = logic.attendance_projection(con, user.athlete_id, date.today())
     if not p["subjects"]:
+        _rule_explainer(floor, relaxed)
         st.info("Your timetable isn't in the planner yet, so attendance can't be projected.")
         return
     w = p["worst"]
@@ -302,14 +315,20 @@ def _athlete_attendance(con, user, floor, start, end, known):
     c1.metric("Lowest subject", f"{w['pct']:.1f}%", w["subject"], delta_color="off")
     c2.metric("Days away for sport", p["sport_days"])
     c3.metric("Counted as on-duty", p["on_duty_days"])
-    if w["pct"] < floor:
-        st.error(f"{w['subject']} would drop below the {floor}% floor from sport alone. Talk to your proctor now.")
-    elif p["uncovered_days"]:
-        st.warning(f"{p['uncovered_days']} sport days don't have an approved letter yet, so they count as absent. "
-                   "Get your exemption letters signed.")
-    st.caption(f"Floor {floor}%. Semester {start:%d %b} to {end:%d %b %Y}"
+    if w["pct"] < relaxed:
+        st.error(f"{w['subject']} would drop below {relaxed}% from sport alone. No relaxation applies below "
+                 f"{relaxed}%, so talk to your proctor now and avoid any more absences.")
+    elif w["pct"] < floor:
+        st.warning(f"{w['subject']} would be below the required {floor}%. You need the Dean of Student Affairs' "
+                   f"permission (via your letter) for the shortfall to be accepted, and you must stay above {relaxed}%.")
+    if p["uncovered_days"]:
+        st.warning(f"{p['uncovered_days']} sport days don't have a Dean-approved letter yet, so they count as absent. "
+                   "Get your letters signed and approved.")
+    _rule_explainer(floor, relaxed)
+    st.caption(f"Required {floor}%, {relaxed}% with the Dean's permission. Semester {start:%d %b} to {end:%d %b %Y}"
                + ("" if known else " (estimated)") + ". Other absences aren't included.")
     df = pd.DataFrame(p["subjects"]).rename(columns={
         "subject": "Subject", "held": "Classes held", "sport_missed": "Missed for sport",
         "on_duty": "Given back (on-duty)", "pct": "Projected (%)"})
+    df["Status"] = [logic.attendance_band(x, floor, relaxed, margin=0) for x in df["Projected (%)"]]
     st.dataframe(df, hide_index=True, width="stretch")

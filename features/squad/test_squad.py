@@ -250,6 +250,8 @@ def test_projection_counts_sport_days_and_on_duty_credit(con):
     lid = letters.create_letter(con, aid, tid)
     for _ in range(3):
         letters.advance_letter(con, lid)                      # to HoD approved
+    assert logic.attendance_projection(con, aid, TODAY)["on_duty_days"] == 0   # the Dean hasn't approved yet
+    letters.advance_letter(con, lid)                          # Dean approved
     after = logic.attendance_projection(con, aid, TODAY)
     assert after["on_duty_days"] == 6 and after["worst"]["pct"] == 100.0
 
@@ -264,9 +266,9 @@ def test_risk_list_flags_athletes_under_the_floor(con):
     settings.set(con, "attendance_min_pct", 99)
     df = logic.attendance_risk(con, u(con, "coach.cricket"), TODAY, only_at_risk=True)
     assert set(df["USN"]) == {"1RV25CS012", "1RV24CS110"}
-    assert (df["Status"] == "Below floor").all()
+    assert (df["Status"] == "Below 99%").all()
     assert (df["With all letters approved (%)"] > df["Projected (%)"]).all()
-    assert (df["What to do"] == "Get the pending exemption letters approved").all()
+    assert (df["What to do"] == "Get the pending letters approved by the Dean of Student Affairs").all()
 
     settings.set(con, "attendance_min_pct", 50)
     assert logic.attendance_risk(con, u(con, "coach.cricket"), TODAY, margin=5, only_at_risk=True).empty
@@ -278,3 +280,35 @@ def test_risk_list_respects_scope(con):
     assert list(df["USN"]) == ["1RV25CS012"]
     ece = logic.attendance_risk(con, u(con, "proctor.cse"), TODAY)
     assert not ece["Dept"].ne("CSE").any()
+
+
+def test_attendance_band_uses_required_and_relaxed_floors():
+    assert logic.attendance_band(90.1, 85, 75) == "OK"
+    assert logic.attendance_band(88, 85, 75) == "Near 85%"
+    assert logic.attendance_band(85, 85, 75, margin=0) == "OK"
+    assert logic.attendance_band(80, 85, 75) == "Below 85%"
+    assert logic.attendance_band(75, 85, 75) == "Below 85%"
+    assert logic.attendance_band(74.9, 85, 75) == "Below 75%"
+
+
+def test_defaults_are_85_required_and_75_with_the_deans_permission(con):
+    assert settings.attendance_floors(con) == (85, 75)
+    p = logic.attendance_projection(con, aarav(con), TODAY)
+    assert (p["floor"], p["relaxed"]) == (85, 75)
+    settings.set(con, "attendance_relaxed_pct", 90)              # never above the required floor
+    assert settings.attendance_floors(con) == (85, 85)
+
+
+def test_risk_list_separates_shortfall_from_below_relaxed(con):
+    _semester(con)
+    coach = u(con, "coach.cricket")
+    worst = logic.attendance_risk(con, coach, TODAY)["Projected (%)"].min()
+    settings.set(con, "attendance_min_pct", 100)
+    settings.set(con, "attendance_relaxed_pct", int(worst) - 1)  # just under the worst projection
+    df = logic.attendance_risk(con, coach, TODAY, only_at_risk=True)
+    assert not df.empty and (df["Status"] == "Below 100%").all()
+    settings.set(con, "on_duty_counts_as_present", False)
+    settings.set(con, "attendance_relaxed_pct", 99)
+    df = logic.attendance_risk(con, coach, TODAY, only_at_risk=True)
+    assert set(df["Status"]) == {"Below 99%"}
+    assert df["What to do"].str.startswith("Below even 99%").all()

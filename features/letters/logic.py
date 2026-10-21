@@ -3,8 +3,10 @@ Letter status tracker + tournament change alerts. No Streamlit here, so every
 function can be unit-tested on its own (see test_letters.py).
 
   1. Letter tracker  - each exemption letter moves through
-                       drafted -> PED signed -> proctor signed -> HoD approved -> submitted,
-                       one step at a time, with a history row for every step.
+                       drafted -> PED confirmed -> proctor signed -> HoD approved -> Dean approved,
+                       one step at a time, with a history row for every step. The last step
+                       is the Dean of Student Affairs' permission, which is what compensates
+                       the attendance. Its key stays "submitted" so older data keeps working.
   2. Alerts          - reacting to core events: when a tournament's dates, travel days,
                        venue or name change, every entered athlete gets an in-app
                        notification, and any letter already drafted for it is flagged
@@ -48,10 +50,10 @@ def _emit(con, event, payload):
 STAGES = ["drafted", "ped_signed", "proctor_signed", "hod_approved", "submitted"]
 STAGE_LABELS = {
     "drafted": "Drafted",
-    "ped_signed": "PED signed",
+    "ped_signed": "PED confirmed",
     "proctor_signed": "Proctor signed",
     "hod_approved": "HoD approved",
-    "submitted": "Submitted",
+    "submitted": "Dean approved",
 }
 
 
@@ -127,7 +129,7 @@ def advance_letter(con, letter_id: int, by: str = "", note: str | None = None) -
         raise LetterError("This letter was rejected. The athlete must redraft it first.")
     nxt = next_stage(letter["stage"])
     if nxt is None:
-        raise LetterError("This letter is already submitted.")
+        raise LetterError("This letter is already approved by the Dean.")
     now = _now()
     con.execute("UPDATE letters_status SET stage=?, updated_at=? WHERE id=?", (nxt, now, letter_id))
     _log(con, letter_id, nxt, by, note, now)
@@ -186,8 +188,11 @@ def can_advance_to(user, stage: str, athlete_id: int, con=None) -> bool:
     role = getattr(user, "role", None)
     if role == "admin":
         return True
-    if stage in ("drafted", "submitted"):
+    if stage == "drafted":
         return role == "athlete" and getattr(user, "athlete_id", None) == athlete_id
+    if stage == "submitted":   # the Dean's permission: recorded by the athlete or the PED, who were there
+        return ((role == "athlete" and getattr(user, "athlete_id", None) == athlete_id)
+                or (role == "coach" and not getattr(user, "sport", None)))
     if stage == "ped_signed":
         return role == "coach" and not getattr(user, "sport", None)   # coach with no sport = PED
     if role != "faculty":
@@ -208,7 +213,7 @@ def advance_as(con, user, letter_id: int, note: str | None = None) -> str:
     letter = get_letter(con, letter_id)
     nxt = next_stage(letter["stage"])
     if nxt is None:
-        raise LetterError("This letter is already submitted.")
+        raise LetterError("This letter is already approved by the Dean.")
     if not can_advance_to(user, nxt, letter["athlete_id"], con):
         raise PermissionError(f"{getattr(user, 'name', 'This user')} cannot mark a letter {STAGE_LABELS[nxt]}.")
     return advance_letter(con, letter_id, by=getattr(user, "name", ""), note=note)

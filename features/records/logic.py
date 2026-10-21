@@ -485,7 +485,7 @@ def semester_summary(con, athlete_id, start: date, end: date, include_health: bo
         "totals": {"tournaments": len(tours), "days_away": sum(t["days_away"] for t in tours),
                    "classes_missed": sum(t["classes_missed"] for t in tours),
                    "tests_missed": sum(t["tests_missed"] for t in tours),
-                   "letters_approved": sum(1 for t in tours if t["letter"] in ("HoD approved", "Submitted"))},
+                   "letters_approved": sum(1 for t in tours if t["letter"] == "Dean approved")},
         "training": training,
         "include_health": include_health,
     }
@@ -509,8 +509,8 @@ def _letter_label(letter: dict | None) -> str:
         return "Rejected"
     if letter.get("needs_redo"):
         return "Needs redo"
-    return {"drafted": "Drafted", "ped_signed": "PED signed", "proctor_signed": "Proctor signed",
-            "hod_approved": "HoD approved", "submitted": "Submitted"}.get(letter["stage"], letter["stage"])
+    return {"drafted": "Drafted", "ped_signed": "PED confirmed", "proctor_signed": "Proctor signed",
+            "hod_approved": "HoD approved", "submitted": "Dean approved"}.get(letter["stage"], letter["stage"])
 
 
 def summary_docx(summary: dict, college: str | None = None) -> bytes:

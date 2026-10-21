@@ -2,7 +2,8 @@
 
 A planner for college athletes balancing sport and studies. It does four jobs:
 - flags tournament-vs-exam clashes
-- produces the attendance-exemption letter and tracks its sign-off (PED, proctor, HoD), with QR verification for faculty
+- produces the leave and attendance-compensation letter to the Dean of Student Affairs (or the Principal), copied to the student's faculty, with an email version of the same text, and tracks its sign-off (PED confirms, proctor and HoD sign, the Dean approves), with QR verification for faculty
+- projects attendance against the college rule: 85% is required, and with a valid reason the Dean can accept down to 75%
 - reminds athletes before tournaments
 - tracks training load, injuries and wellness, without wearables
 

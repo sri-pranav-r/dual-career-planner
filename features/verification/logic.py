@@ -196,7 +196,7 @@ class Verification:
     athlete: dict | None = None
     tournament: dict | None = None
     entered: bool = False             # athlete is on the PED's entry list now
-    ped_confirmed: bool = False       # letter status has reached "PED signed"
+    ped_confirmed: bool = False       # letter status has reached "PED confirmed"
     created_by: str | None = None     # who entered the tournament in the system
     letter_window: tuple | None = None
     current_window: tuple | None = None

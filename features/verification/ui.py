@@ -147,7 +147,7 @@ def render_department(con, user) -> None:
     k1, k2, k3 = st.columns(3)
     k1.metric("Athletes away", df["athlete_id"].nunique())
     k2.metric("Missing a CIE / SEE", int((df["Tests missed"] != "").sum()))
-    k3.metric("Letters not yet approved", int((~df["Letter status"].map(logic._norm).isin({"hodapproved", "submitted"})).sum()))
+    k3.metric("Letters not yet approved", int((~df["Letter status"].map(logic._norm).isin({"hodapproved", "deanapproved"})).sum()))
     st.dataframe(df.drop(columns=["athlete_id", "tournament_id"]), hide_index=True, width="stretch")
 
     st.markdown("#### Make-up tests to schedule")

@@ -147,12 +147,14 @@ settings.base_url(con) -> str           # where the app is reachable, for links 
 
 | key | default | meaning |
 |---|---|---|
-| `attendance_min_pct` | 85 | the attendance floor (%) a student must stay above |
+| `attendance_min_pct` | 85 | the required attendance (%) |
+| `attendance_relaxed_pct` | 75 | the lowest attendance (%) the Dean of Student Affairs can accept for a valid reason; `settings.attendance_floors(con)` returns (required, relaxed) |
 | `on_duty_counts_as_present` | True | whether sport absences with an approved letter count as present |
 | `max_on_duty_days` | 0 | the cap on on-duty days per semester (0 = no cap) |
 | `semester_start` / `semester_end` | "" | ISO dates. Empty means unknown, so assume the last 120 days |
 | `college_name` | "Your College" | |
-| `letter_*` | see `settings.DEFAULTS` | letter wording: addressee, through line, request paragraph, signature lines |
+| `letter_addressee` | "Dean of Student Affairs" | or "Principal" (`core.ADDRESSEES`); fills `{addressee}` |
+| `letter_*` | see `settings.DEFAULTS` | letter wording: addressee, optional through line, request paragraph, signature lines, copy-to list |
 | `base_url` | "" | empty means auto-detect (PLANNER_BASE_URL env, then the browser's host, then the LAN IP) |
 
 ### Letters (`letterdoc.py`)
@@ -162,7 +164,11 @@ Every exemption letter goes through one function, so the template and the QR cod
 letterdoc.make_letter(con, athlete: dict, tournament: dict, clashes=None) -> bytes
     # clashes=None means they're computed from the timetable and events. Applies settings.letter_template
     # and stamps the verification QR when that feature is installed.
+letterdoc.make_email(con, athlete: dict, tournament: dict, clashes=None) -> dict
+    # the same text as an email: {to, cc, subject, body}
 ```
+
+Letter stages keep their stored keys; the labels follow the college's process: drafted, `ped_signed` (PED confirmed), `proctor_signed`, `hod_approved`, `submitted` (Dean approved). Only a Dean-approved letter makes sport days count as present.
 
 ### Login sessions
 A refresh no longer signs people out. Core keeps a signed session token in the URL query param `s`.

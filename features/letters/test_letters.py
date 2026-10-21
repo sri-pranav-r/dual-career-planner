@@ -90,6 +90,8 @@ def test_permissions_per_stage():
     assert logic.can_advance_to(proctor, "proctor_signed", 7) and not logic.can_advance_to(hod, "proctor_signed", 7)
     assert logic.can_advance_to(hod, "hod_approved", 7) and not logic.can_advance_to(proctor, "hod_approved", 7)
     assert logic.can_advance_to(ath, "submitted", 7) and not logic.can_advance_to(other, "submitted", 7)
+    assert logic.can_advance_to(ped, "submitted", 7) and not logic.can_advance_to(coach, "submitted", 7)
+    assert not logic.can_advance_to(hod, "submitted", 7)
     assert not logic.can_advance_to(ath, "ped_signed", 7)
     assert all(logic.can_advance_to(admin, s, 7) for s in logic.STAGES)
 
@@ -248,3 +250,9 @@ def test_core_delete_athlete_clears_letters_through_hooks(con):
     data.delete_athlete(con, a)
     assert not hooks.last_errors, hooks.last_errors
     assert _letter_rows(con, a) == (0, 0, 0)
+
+
+def test_stage_labels_follow_the_dean_process():
+    assert logic.STAGE_LABELS["ped_signed"] == "PED confirmed"
+    assert logic.STAGE_LABELS["submitted"] == "Dean approved"
+    assert logic.STAGES[-1] == "submitted"        # stored key unchanged, so older letters still load
