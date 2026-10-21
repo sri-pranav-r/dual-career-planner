@@ -125,3 +125,29 @@ def test_email_version_matches_the_letter():
     assert "- 05 Oct 2026 (Mon): CIE, Maths CIE 2" in m["body"]
     assert "compensate my attendance" in m["body"] and "USN: 1XX25CS001" in m["body"]
     assert "{" not in m["body"] + m["subject"] + m["cc"]
+
+
+def test_letter_and_email_have_no_em_dashes():
+    a, t, cl = _letter_inputs()
+    m = core.build_letter_email(a, t, cl)
+    assert "\u2014" not in m["subject"] + m["body"] + m["cc"]
+    assert all("\u2014" not in str(v) for v in core.DEFAULT_LETTER.values())
+
+
+def test_legal_pages_name_the_college_and_cover_the_basics():
+    import legal
+    p, t = legal.text("privacy", "Test College"), legal.text("terms", "Test College")
+    assert "Test College" in p and "{college}" not in p + t
+    assert "never see training, wellness or injuries" in p and "deleted" in p
+    assert "Not the official attendance record" in t and "Not medical advice" in t
+    assert "\u2014" not in p + t
+
+
+def test_no_emoji_icons_in_the_interface():
+    import re
+    from pathlib import Path
+    emoji = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF\u2B50\u2705\u274C\uFE0F]")
+    here = Path(__file__).parent
+    bad = [f"{f}:{i}" for f in here.rglob("*.py") if "test_" not in f.name
+           for i, line in enumerate(f.read_text().splitlines(), 1) if emoji.search(line)]
+    assert bad == []

@@ -424,12 +424,12 @@ def plan_table(plan: dict) -> pd.DataFrame:
     for d in plan["days"]:
         on = []
         if d["away"] == "tournament":
-            on.append("🏆 Tournament")
+            on.append("Tournament")
         elif d["away"] == "travel":
-            on.append("✈️ Travel")
-        on += [f"📝 {t['title']}" for t in d["tests"]]
+            on.append("Travel")
+        on += [t["title"] for t in d["tests"]]
         if d["classes"]:
-            on.append(f"📚 {len(d['classes'])} class{'es' if len(d['classes']) > 1 else ''}")
+            on.append(f"{len(d['classes'])} class{'es' if len(d['classes']) > 1 else ''}")
         tr, st = d["training"], d["study"]
         rules = sorted({s["rule_id"] for s in (tr, st, d["academic"]) if s}, key=RULE_PRIORITY.index)
         rows.append({"Date": _fmt(d["date"]), "What's on": ", ".join(on) or "Free day",

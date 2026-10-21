@@ -7,6 +7,7 @@ each person sees depends on their role (see auth.py). Feature modules under
 features/ add their own tabs and public pages (see INTERFACES.md).
 """
 import os
+from pathlib import Path
 from datetime import date, timedelta
 
 import pandas as pd
@@ -17,15 +18,21 @@ import auth
 import core
 import data
 import features
+import legal
 import letterdoc
 import nav
 import roster
 import settings
 
-st.set_page_config(page_title="Dual-Career Planner", page_icon="🏅", layout="wide")
+FAVICON = str(Path(__file__).with_name("assets") / "favicon.png")
+st.set_page_config(page_title="Dual-Career Planner", page_icon=FAVICON, layout="wide")
 
+# Hide Streamlit's own chrome (main menu, deploy button, footer, coloured top bar).
 # Phones: keep metric tiles two to a row and smaller, instead of one giant tile per screen.
 st.html("""<style>
+#MainMenu, footer, [data-testid="stAppDeployButton"], [data-testid="stDecoration"],
+[data-testid="stMainMenu"] { display: none !important; }
+[data-testid="stMetricDelta"] { border-radius: 0.25rem !important; }
 @media (max-width: 640px) {
   [data-testid="stMetricValue"] { font-size: 1.4rem; }
   [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 0.75rem !important; }
@@ -45,6 +52,19 @@ today = date.today()
 os.environ["PLANNER_BASE_URL"] = settings.base_url(con)
 
 # ----------------------------------------------------------------- public pages (no login)
+def close_doc():
+    del st.query_params[legal.PARAM]
+
+
+def open_doc(doc):
+    st.query_params[legal.PARAM] = doc
+
+
+if st.query_params.get(legal.PARAM) in legal.DOCS:
+    st.button("Back", icon=":material/arrow_back:", on_click=close_doc)
+    legal.render(con, st.query_params[legal.PARAM])
+    st.stop()
+
 route = features.public_route(st.query_params)
 if route:
     fn, value = route
@@ -54,10 +74,18 @@ if route:
 
 # ----------------------------------------------------------------- login
 def login_page():
-    st.title("🏅 Dual-Career Planner")
+    st.title("Dual-Career Planner")
     col, _ = st.columns([1, 1])
+    col.markdown(
+        f"For student athletes at {settings.get(con, 'college_name')}, their coaches, the Physical Education "
+        "Director and faculty. It lists the classes and tests each tournament clashes with, prepares the leave "
+        "letter to the Dean of Student Affairs and follows its approval, estimates attendance, and keeps a log of "
+        "training load.")
     with col:
         auth.login_form()
+        a, b = st.columns(2)
+        a.button("Privacy policy", on_click=open_doc, args=("privacy",), type="tertiary")
+        b.button("Terms of use", on_click=open_doc, args=("terms",), type="tertiary")
     if data.get_meta(con, "demo") == "1":
         with col.expander("Demo accounts"):
             st.markdown(
@@ -171,12 +199,13 @@ def start_here(steps):
     with st.expander(title, expanded=left > 0):
         for i, (done, text, key) in enumerate(steps, 1):
             c1, c2 = st.container(key=f"step_{i}").columns([5, 1], vertical_alignment="center")
-            c1.markdown(f"{i}. " + ("✅ ~~" + text + "~~" if done else ("⬜ " if done is False else "") + text))
+            c1.markdown(f"{i}. " + (":green[:material/check_circle:] ~~" + text + "~~" if done
+                                    else (":material/radio_button_unchecked: " if done is False else "") + text))
             if key in page_keys and not done:
                 c2.button("Go", key=f"start_{i}_{key}", on_click=nav.go, args=(key,), width="stretch")
 
 
-TONE_ICON = {"red": "🔴", "amber": "🟠", "blue": "🔵"}
+TONE_ICON = {"red": ":red[:material/error:]", "amber": ":orange[:material/warning:]", "blue": ":blue[:material/info:]"}
 
 
 def athlete_metrics(athlete, s):
@@ -231,7 +260,9 @@ def athlete_attention(athlete, s):
     attn = feature_call("plan", "logic", "attendance_status", con, aid, today)
     if attn and attn["risk"] == "high":
         items.append(("red", f"Attendance in **{attn['subject']}** could drop to {attn['pct']:.0f}% "
-                             f"(required {attn['floor']}%, {attn['relaxed']}% only with the Dean's permission).",
+                             f"(the college expects {attn['floor']}%"
+                             + (f", or {attn['relaxed']}% with the Dean's permission)." if attn["relaxed"] < attn["floor"]
+                                else ")."),
                       "attendance"))
     open_tests = [t for t in feature_call("squad", "logic", "missed_tests", con, aid) or []
                   if t["request"] is None and t["test_date"] >= today - timedelta(days=30)]
@@ -666,17 +697,21 @@ def render_users():
 
 def render_settings():
     st.subheader("College rules")
-    st.caption("Set to the college's rule: 85% attendance is required, and with a valid reason (sport, hackathons, "
-               "other approved leave) the Dean of Student Affairs can accept down to 75%. Attendance risk and the "
-               "letters read these.")
+    st.caption("The defaults follow the usual rule: 85% attendance expected, and with a valid reason (sport, "
+               "hackathons, other approved leave) the Dean of Student Affairs can accept down to 75%. Change any of "
+               "them to match your college. Attendance pages, Home and the letters read these.")
     cur = settings.all(con)
     with st.form("rules"):
         c1, c2 = st.columns(2)
         pct = c1.number_input(settings.LABELS["attendance_min_pct"], 0, 100, int(cur["attendance_min_pct"]))
         relaxed = c2.number_input(settings.LABELS["attendance_relaxed_pct"], 0, 100, int(cur["attendance_relaxed_pct"]),
-                                  help="Accepted only with the Dean's permission. Below this no relaxation applies.")
+                                  help="Accepted with the Dean's permission. Ignored when the option below is off.")
+        relaxed_on = st.checkbox(settings.LABELS["attendance_relaxed_enabled"], bool(cur["attendance_relaxed_enabled"]),
+                                 help="Off: there is a single attendance line, the required percentage.")
+        rules = list(settings.ON_DUTY_RULES)
+        od_rule = st.selectbox(settings.LABELS["on_duty_from"], rules, index=rules.index(settings.on_duty_rule(con)),
+                               format_func=settings.ON_DUTY_RULES.get)
         cap = c1.number_input(settings.LABELS["max_on_duty_days"], 0, 180, int(cur["max_on_duty_days"]))
-        od = st.checkbox(settings.LABELS["on_duty_counts_as_present"], bool(cur["on_duty_counts_as_present"]))
         c3, c4 = st.columns(2)
         s_start = c3.date_input(settings.LABELS["semester_start"],
                                 date.fromisoformat(cur["semester_start"]) if cur["semester_start"] else None)
@@ -685,13 +720,15 @@ def render_settings():
         if st.form_submit_button("Save rules"):
             if s_start and s_end and s_end < s_start:
                 st.error("Semester end is before its start.")
-            elif relaxed > pct:
-                st.error("The relaxed attendance can't be above the required attendance.")
+            elif relaxed_on and relaxed > pct:
+                st.error("The lower attendance can't be above the expected attendance.")
             else:
-                for k, v in [("attendance_min_pct", pct), ("attendance_relaxed_pct", relaxed), ("max_on_duty_days", cap), ("on_duty_counts_as_present", od),
+                for k, v in [("attendance_min_pct", pct), ("attendance_relaxed_pct", relaxed),
+                             ("attendance_relaxed_enabled", relaxed_on), ("max_on_duty_days", cap),
                              ("semester_start", s_start.isoformat() if s_start else ""),
                              ("semester_end", s_end.isoformat() if s_end else "")]:
                     settings.set(con, k, v)
+                settings.set_on_duty_rule(con, od_rule)
                 st.success("Saved.")
 
     st.subheader("Exemption letter wording")
@@ -909,6 +946,14 @@ def part_staff_home():
     start_here(steps)
 
 
+def attendance_rule_text() -> str:
+    text = feature_call("squad", "ui", "rule_text", con)
+    if text:
+        return text
+    floor, relaxed = settings.attendance_floors(con)
+    return f"The college expects {floor}% attendance" + (f", or {relaxed}% with the Dean's permission." if relaxed < floor else ".")
+
+
 def part_help():
     st.markdown("#### What each page is for")
     for section, items in nav.sections(pages):
@@ -922,11 +967,8 @@ def part_help():
         "1.3 to 1.5 caution, 0.8 to 1.3 the sweet spot, and below 0.8 under-trained.\n"
         "- A **clash** is any timetable slot or CIE / SEE / lab date inside a tournament's window, travel days "
         "included.\n"
-        f"- **Attendance**: {settings.get(con, 'attendance_min_pct')}% is required. With a valid reason (sport, "
-        f"hackathons, other approved leave) the Dean of Student Affairs can accept down to "
-        f"{settings.get(con, 'attendance_relaxed_pct')}%, on a letter or email to the Dean copied to your faculty. "
-        "Sport days count as present once the Dean has approved the letter. Attendance risk also uses the on-duty "
-        "rule and the semester dates set by the admin in Settings.")
+        "- **Attendance**: " + attendance_rule_text().replace("**How attendance is worked out here.** ", "")
+        + " Attendance risk also uses the on-duty cap and the semester dates set in Settings.")
     st.markdown("#### Who sees what")
     st.markdown(
         "- **Athletes** see only their own data.\n"
@@ -1001,7 +1043,7 @@ def core_ok(name):
         return auth.can(user, "import_roster")
     if name in ("users", "settings"):
         return auth.can(user, "manage_users")
-    return name == "help"
+    return name in ("help", "privacy_policy", "terms")
 
 
 def page_detail():
@@ -1027,6 +1069,8 @@ CORE = {
     "users": render_users,
     "settings": render_settings,
     "help": part_help,
+    "privacy_policy": lambda: legal.render(con, "privacy", show_title=False),
+    "terms": lambda: legal.render(con, "terms", show_title=False),
 }
 
 pages = nav.build(user.role, feature_tabs, core_ok)
@@ -1036,7 +1080,10 @@ page = nav.current(pages, st.query_params)
 # ----------------------------------------------------------------- sidebar
 ROLE_LABEL = {"athlete": "Athlete", "coach": "Coach", "faculty": "Faculty", "admin": "Admin"}
 st.html(nav.CSS)
-st.sidebar.markdown("### 🏅 Dual-Career Planner")
+st.logo(FAVICON)
+st.sidebar.markdown("### Dual-Career Planner")
+if data.get_meta(con, "demo") == "1":
+    st.sidebar.caption("Demo mode: every athlete, tournament and number here is made up.")
 role_label = "Physical Education Director" if user.is_ped else ROLE_LABEL[user.role]
 if user.role == "coach" and user.sport:
     role_label += f" · {user.sport}"
@@ -1068,7 +1115,7 @@ if st.sidebar.button("Sign out", icon=":material/logout:"):
     auth.logout_session(con)
     st.rerun()
 if features.load_errors and auth.can(user, "manage_users"):
-    with st.sidebar.expander("⚠️ Feature load errors"):
+    with st.sidebar.expander("Feature load errors", icon=":material/warning:"):
         for name, err in features.load_errors.items():
             st.code(f"{name}\n{err}")
 

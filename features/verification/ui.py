@@ -44,8 +44,10 @@ def render_verify(con, token: str) -> None:
         st.markdown(f"**{t['name']}**  \n{t.get('venue') or ''}  \n"
                     f"Plays {logic._d(t['start_date']):%d %b} to {logic._d(t['end_date']):%d %b %Y}  \n"
                     f"Away incl. travel: **{_fmt(first)} to {_fmt(last)}**")
-        st.markdown(("✅ On the entry list" if v.entered else "❌ Not on the entry list")
-                    + ("  \n✅ PED confirmed" if v.ped_confirmed else "  \n⏳ Awaiting PED signature"))
+        st.markdown((":green[:material/check_circle:] On the entry list" if v.entered
+                     else ":red[:material/cancel:] Not on the entry list")
+                    + ("  \n:green[:material/check_circle:] PED confirmed" if v.ped_confirmed
+                       else "  \n:material/pending: Waiting for the PED to confirm"))
         if v.created_by:
             st.caption(f"Entered by {v.created_by}")
 
@@ -102,7 +104,7 @@ def _decision_box(con, v: logic.Verification) -> None:
         return
     note = st.text_input("Note to the student (required to reject)", key="ver_note")
     b1, b2 = st.columns(2)
-    for col, decision, label, kind in ((b1, "approved", "✅ Approve", "primary"), (b2, "rejected", "❌ Reject", "secondary")):
+    for col, decision, label, kind in ((b1, "approved", "Approve", "primary"), (b2, "rejected", "Reject", "secondary")):
         if col.button(label, type=kind, width="stretch", key=f"ver_{decision}"):
             try:
                 status = logic.record_decision(con, user, aid, tid, decision, note)
@@ -156,5 +158,5 @@ def render_department(con, user) -> None:
         st.caption("No CIE or SEE falls inside these absences.")
     else:
         st.dataframe(plan, hide_index=True, width="stretch")
-        st.download_button("⬇️ Download make-up list (.csv)", plan.to_csv(index=False).encode(),
+        st.download_button("Download make-up list (.csv)", plan.to_csv(index=False).encode(),
                            file_name=f"makeup_tests_{today}.csv", mime="text/csv")

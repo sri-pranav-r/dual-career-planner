@@ -8,7 +8,8 @@ import streamlit as st
 
 from . import logic
 
-ICONS = {"done": "✅", "next": "⏳", "todo": "▫️"}
+ICONS = {"done": ":green[:material/check_circle:]", "next": ":material/pending:",
+         "todo": ":material/radio_button_unchecked:"}
 
 
 def _stepper(stage: str | None) -> str:
@@ -136,9 +137,9 @@ def _staff_board(con, user):
             if r["stage"] is None:
                 left.caption("Letter not drafted yet")
             elif r["rejected"]:
-                left.caption("❌ Rejected, waiting for the athlete to redraft")
+                left.caption(":red[:material/cancel:] Rejected, waiting for the athlete to redraft")
             elif r["needs_redo"]:
-                left.caption("⚠️ Dates changed, waiting for the athlete to redraft")
+                left.caption(":orange[:material/warning:] Dates changed, waiting for the athlete to redraft")
             else:
                 left.caption(_stepper(r["stage"]))
             if can and right.button(f"Mark {logic.STAGE_LABELS[nxt]}", key=f"adv_{r['letter_id']}", type="primary"):
@@ -174,7 +175,7 @@ def render_inbox(con, user):
     for n in items:
         fresh = n["read_at"] is None
         with st.container(border=True):
-            st.markdown(("🔴 " if fresh else "") + n["message"])
+            st.markdown(("**New** · " if fresh else "") + n["message"])
             c1, c2 = st.columns([4, 1])
             c1.caption(n["created_at"].replace("T", " "))
             if fresh and c2.button("Mark read", key=f"read_{n['id']}"):
@@ -187,4 +188,4 @@ def unread_badge(con, user) -> str:
     if getattr(user, "role", None) != "athlete" or not getattr(user, "athlete_id", None):
         return ""
     n = logic.unread_count(con, user.athlete_id)
-    return f"🔔 {n} new notification{'s' if n != 1 else ''}. See Notifications in the menu." if n else ""
+    return f"{n} new notification{'s' if n != 1 else ''}. See Notifications in the menu." if n else ""

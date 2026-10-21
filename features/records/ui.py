@@ -39,9 +39,9 @@ def _can_see_health(user) -> bool:
 # ===================================================================== Calendar
 
 _CAL_STYLE = {
-    "tournament": ("🏆", "#f59e0b"), "travel": ("✈️", "#a78bfa"), "injury": ("🩹", "#ef4444"),
-    "SEE": ("🎓", "#dc2626"), "CIE": ("📝", "#ea580c"), "lab": ("🧪", "#0ea5e9"),
-    "training": ("🏋️", "#16a34a"), "classes": ("📚", "#64748b"),
+    "tournament": ("orange", "#d97706"), "travel": ("blue", "#0f766e"), "injury": ("red", "#ef4444"),
+    "SEE": ("red", "#b91c1c"), "CIE": ("orange", "#ea580c"), "lab": ("blue", "#0284c7"),
+    "training": ("green", "#16a34a"), "classes": ("gray", "#64748b"),
 }
 _CAL_NAMES = {"tournament": "Tournament", "travel": "Travel", "injury": "Out injured", "SEE": "SEE exam",
               "CIE": "CIE test", "lab": "Lab exam", "training": "Training logged", "classes": "Classes"}
@@ -55,7 +55,9 @@ _CSS = """
 .rc-cal td.rc-today{outline:2px solid #2563eb;outline-offset:-2px}
 .rc-n{font-weight:600;margin-bottom:2px}
 .rc-chip{display:block;border-left:3px solid;padding:0 3px;margin:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-@media (max-width:640px){.rc-cal td{height:56px;padding:2px}.rc-lbl{display:none}.rc-chip{display:inline;border:0;padding:0}}
+.rc-dot{display:none;width:8px;height:8px;margin:1px;vertical-align:middle}
+@media (max-width:640px){.rc-cal td{height:56px;padding:2px}.rc-lbl{display:none}.rc-chip{display:inline;border:0;padding:0}
+.rc-dot{display:inline-block}}
 </style>
 """
 
@@ -76,10 +78,11 @@ def calendar_html(items: dict, year: int, month: int, today: date, show: set[str
             for it in items.get(d, []):
                 if it["kind"] not in show:
                     continue
-                icon, colour = _CAL_STYLE[it["kind"]]
+                colour = _CAL_STYLE[it["kind"]][1]
                 title = html.escape(it.get("subjects") or it["label"], quote=True)
-                cell.append(f'<span class="rc-chip" style="border-color:{colour}" title="{title}">{icon}'
-                            f'<span class="rc-lbl"> {html.escape(it["label"])}</span></span>')
+                cell.append(f'<span class="rc-chip" style="border-color:{colour}" title="{title}">'
+                            f'<span class="rc-dot" style="background:{colour}"></span>'
+                            f'<span class="rc-lbl">{html.escape(it["label"])}</span></span>')
             out.append(f'<td class="{" ".join(cls)}">{"".join(cell)}</td>')
         out.append("</tr>")
     out.append("</table>")
@@ -102,7 +105,7 @@ def render_calendar(con, user):
                                format_func=lambda ym: date(ym[0], ym[1], 1).strftime("%B %Y"))
     kinds = logic.CAL_KINDS if _can_see_health(user) else [k for k in logic.CAL_KINDS if k != "injury"]
     show = set(c2.multiselect("Show", kinds, default=kinds, key="rec_cal_show",
-                              format_func=lambda k: f"{_CAL_STYLE[k][0]} {_CAL_NAMES[k]}"))
+                              format_func=_CAL_NAMES.get))
     items = logic.month_items(con, a["id"], year, month, today)
     st.markdown(calendar_html(items, year, month, today, show), unsafe_allow_html=True)
     st.caption("On a phone only the icons show; pick a day below to see what's on it. "
@@ -118,12 +121,12 @@ def render_calendar(con, user):
         st.write("Nothing on this day.")
     for it in rows:
         extra = f": {it['subjects']}" if it.get("subjects") else ""
-        st.markdown(f"{_CAL_STYLE[it['kind']][0]} **{_CAL_NAMES[it['kind']]}** · {it['label']}{extra}")
+        st.markdown(f":{_CAL_STYLE[it['kind']][0]}[:material/square:] **{_CAL_NAMES[it['kind']]}** · {it['label']}{extra}")
 
 
 # ===================================================================== Injuries
 
-_STATUS = {"out": "🔴 Out", "returning": "🟡 Returning", "cleared": "🟢 Cleared"}
+_STATUS = {"out": "Out", "returning": "Returning", "cleared": "Cleared"}
 
 
 def _injury_form(con, user, aid, key):
@@ -162,7 +165,7 @@ def _ramp_view(con, user, inj: dict, today: date, key: str):
                              "% of usual load": f"{w['pct']}%",
                              "Target (AU)": None if w["target"] is None else int(w["target"]),
                              "Logged (AU)": None if w["logged"] is None else int(w["logged"]),
-                             "": "⚠️ over target" if w["flag"] else ""})
+                             "": "Over target" if w["flag"] else ""})
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
             if r["current"] and r["current"]["flag"]:
                 st.warning("This week's logged load is already above the return plan. Ease off until next week.")
@@ -207,7 +210,7 @@ def render_injuries(con, user):
                 "Athlete": c["name"], "Sport": c["sport"], "Injury": c["body_part"], "Status": _STATUS[c["status"]],
                 "Back from": c["return_on"].strftime("%d %b"),
                 "This week": "" if c["this_week_pct"] is None else f"{c['this_week_pct']}% load",
-                "": "⚠️ over target" if c["over_target"] else ""} for c in cur]),
+                "": "Over target" if c["over_target"] else ""} for c in cur]),
                 hide_index=True, width="stretch")
         if d["by_month"].empty:
             st.info("No injuries logged for your athletes yet.")
@@ -236,7 +239,7 @@ def render_injuries(con, user):
 
 # ===================================================================== Taper
 
-_ZONE_ICON = {"High risk": "🔴", "Caution": "🟠", "Sweet spot": "🟢", "Under-trained": "🔵", "No data yet": "⚪"}
+
 _TREND = {"rising": "↑ rising", "falling": "↓ falling", "steady": "→ steady"}
 
 
@@ -246,7 +249,7 @@ def _plan_view(con, aid, t, today):
                 f"({p['days_to_depart']} day(s) from today)")
     c1, c2, c3 = st.columns(3)
     c1.metric("Load ratio (ACWR)", "-" if p["ratio"] is None else f"{p['ratio']:.2f}")
-    c2.metric("Zone", f"{_ZONE_ICON[p['zone']]} {p['zone']}")
+    c2.metric("Zone", p["zone"])
     c3.metric("Trend", _TREND[p["trend"]])
     st.info(p["advice"])
     rows = []
@@ -285,7 +288,7 @@ def render_taper(con, user):
         st.dataframe(pd.DataFrame([{
             "Athlete": r["name"], "Sport": r["sport"], "Tournament": r["tournament"],
             "Leaves": r["depart"].strftime("%a %d %b"), "ACWR": "-" if r["acwr"] is None else round(r["acwr"], 2),
-            "Zone": f"{_ZONE_ICON[r['zone']]} {r['zone']}", "Trend": _TREND[r["trend"]],
+            "Zone": r["zone"], "Trend": _TREND[r["trend"]],
             "Cut volume to": f"{r['cut_to_pct']}%", "Rest days": r["rest_days"]} for r in rows]),
             hide_index=True, width="stretch")
     a = _pick_athlete(con, user, "rec_taper_pick", "Day-by-day plan for")

@@ -321,3 +321,16 @@ def test_email_version_uses_admin_wording(con):
     m = letterdoc.make_email(con, a, t)
     assert m["to"] == "The Principal, Test College"
     assert t["name"] in m["subject"] and a["name"] in m["body"]
+
+
+def test_flexible_attendance_settings(con):
+    import settings
+    assert settings.get(con, "attendance_relaxed_enabled") is True
+    assert settings.on_duty_rule(con) == "dean"
+    settings.set(con, "attendance_min_pct", 80)
+    settings.set(con, "attendance_relaxed_pct", 70)
+    assert settings.attendance_floors(con) == (80, 70)
+    settings.set(con, "attendance_relaxed_enabled", False)
+    assert settings.attendance_floors(con) == (80, 80)
+    with pytest.raises(ValueError):
+        settings.set(con, "on_duty_from", "never")       # "never" is set through on_duty_counts_as_present

@@ -13,7 +13,8 @@ import settings
 from . import logic
 
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-STATUS_ICON = {"requested": "⏳", "approved": "📅", "rejected": "❌", "completed": "✅", "withdrawn": "▫️"}
+STATUS_ICON = {"requested": ":material/pending:", "approved": ":material/event:", "rejected": ":red[:material/cancel:]",
+               "completed": ":green[:material/check_circle:]", "withdrawn": ":material/remove_circle_outline:"}
 
 
 def _history(con, rid):
@@ -80,12 +81,12 @@ def _athlete_makeups(con, user):
                 continue
             label = logic.MAKEUP_LABELS[req["status"]]
             if req["status"] == "approved":
-                left.success(f"📅 Make-up on **{logic._d(req['makeup_date']):%a %d %b %Y}**"
+                left.success(f"Make-up on **{logic._d(req['makeup_date']):%a %d %b %Y}**"
                              + (f". {req['makeup_note']}" if req["makeup_note"] else ""))
             else:
                 left.caption(f"{STATUS_ICON[req['status']]} {label}"
                              + (". Waiting for your proctor, class teacher or HoD." if req["status"] == "requested" else ""))
-            right.download_button("⬇️ Request (.docx)", logic.makeup_request_docx(con, req["id"]),
+            right.download_button("Request (.docx)", logic.makeup_request_docx(con, req["id"]),
                                   file_name=f"makeup_{req['title'].replace(' ', '_')}.docx", mime=DOCX,
                                   key=f"mk_dl_{req['id']}")
             if req["status"] in logic.OPEN and right.button("Withdraw", key=f"mk_wd_{req['id']}"):
@@ -110,7 +111,7 @@ def _staff_makeups(con, user):
     c1.metric("Waiting to be scheduled", int((df["Status"] == "Requested").sum()))
     c2.metric("Scheduled", int((df["Status"] == "Scheduled").sum()))
     c3.metric("Students", df["athlete_id"].nunique())
-    st.download_button("⬇️ Download as CSV", df.drop(columns=["id", "athlete_id", "tournament_id"]).to_csv(index=False),
+    st.download_button("Download as CSV", df.drop(columns=["id", "athlete_id", "tournament_id"]).to_csv(index=False),
                        file_name="makeup_requests.csv", mime="text/csv", key="mk_csv")
     if not decider:
         st.dataframe(df.drop(columns=["id", "athlete_id", "tournament_id"]), hide_index=True, width="stretch")
@@ -246,7 +247,7 @@ def render_bulk_letters(con, user):
         _, blob, index = got
         st.success(f"{len(index)} letters ready.")
         t = data.tournament(con, tid)
-        st.download_button("⬇️ Download all letters (.zip)", blob,
+        st.download_button("Download all letters (.zip)", blob,
                            file_name=f"exemption_letters_{logic._safe(t['name'])}.zip", mime="application/zip",
                            key="bulk_dl")
         st.dataframe(pd.DataFrame(index), hide_index=True, width="stretch")
@@ -254,12 +255,30 @@ def render_bulk_letters(con, user):
 
 # ----------------------------------------------------------------- tab: Attendance risk
 
-def _rule_explainer(floor, relaxed):
-    st.info(f"**How the attendance rule works.** {floor}% attendance in every subject is mandatory. If you miss "
-            f"classes for a valid reason, such as representing the college at a tournament or hackathon or other "
-            f"approved leave, the Dean of Student Affairs can accept attendance down to **{relaxed}%**. That needs "
-            f"the Dean's permission and a letter (or email) to the Dean, copied to your faculty, so the absence is "
-            f"compensated. Below {relaxed}% no relaxation applies.", icon=":material/info:")
+SPORT_DAYS = {
+    "dean": "Sport days count as present once the Dean of Student Affairs has approved the letter.",
+    "hod": "Sport days count as present once the HoD has approved the letter.",
+    "always": "Sport days count as present straight away, without waiting for a letter.",
+    "never": "Sport days count as absent, even with a letter.",
+}
+
+
+def rule_text(con) -> str:
+    """The attendance rule as set in Settings, in plain words."""
+    floor, relaxed = settings.attendance_floors(con)
+    text = f"**How attendance is worked out here.** The college expects {floor}% attendance in each subject. "
+    if relaxed < floor:
+        text += (f"For a valid reason, such as representing the college at a tournament or hackathon or other "
+                 f"approved leave, the Dean of Student Affairs can accept down to {relaxed}%, on a letter or email "
+                 f"to the Dean copied to your faculty. ")
+    text += SPORT_DAYS[settings.on_duty_rule(con)]
+    text += (" These are estimates from the timetable and tournament dates; the college's own register is the "
+             "official record. The admin can change these rules in Settings.")
+    return text
+
+
+def _rule_explainer(con):
+    st.info(rule_text(con), icon=":material/info:")
 
 
 def render_attendance(con, user):
@@ -269,13 +288,10 @@ def render_attendance(con, user):
         _athlete_attendance(con, user, floor, relaxed, start, end, known)
         return
     st.subheader("Attendance risk from sport absences")
-    _rule_explainer(floor, relaxed)
+    _rule_explainer(con)
     st.caption(f"Projected end-of-semester attendance in each athlete's worst subject once tournament days are "
-               f"taken out. Required {floor}%, {relaxed}% with the Dean's permission. "
-               f"Semester {start:%d %b} to {end:%d %b %Y}."
-               + ("" if known else " These dates are a guess until the admin sets them in Settings.")
-               + (" Absences with a Dean-approved letter count as present." if settings.get(con, "on_duty_counts_as_present")
-                  else " Sport absences count as absent even with a letter."))
+               f"taken out. Semester {start:%d %b} to {end:%d %b %Y}."
+               + ("" if known else " These dates are a guess until the admin sets them in Settings."))
     c1, c2, c3 = st.columns(3)
     margin = c1.slider(f"Warn within (points above {floor}%)", 0, 15, 5, key="att_margin")
     other = c2.slider("Allow for other absences (%)", 0, 20, 5, key="att_other",
@@ -286,9 +302,13 @@ def render_attendance(con, user):
         st.success(f"Nobody is near {floor}%." if only else "No sport absences this semester.")
         return
     below_relaxed, below_floor, near = f"Below {relaxed}%", f"Below {floor}%", f"Near {floor}%"
-    k1, k2, k3 = st.columns(3)
-    k1.metric(f"Below {relaxed}% (no relaxation)", int((df["Status"] == below_relaxed).sum()))
-    k2.metric(f"{relaxed} to {floor}% (needs the Dean)", int((df["Status"] == below_floor).sum()))
+    if relaxed < floor:
+        k1, k2, k3 = st.columns(3)
+        k1.metric(f"Below {relaxed}%", int((df["Status"] == below_relaxed).sum()))
+        k2.metric(f"{relaxed} to {floor}% (needs the Dean)", int((df["Status"] == below_floor).sum()))
+    else:
+        k1, k3 = st.columns(2)
+        k1.metric(f"Below {floor}%", int((df["Status"] == below_floor).sum()))
     k3.metric(f"Near {floor}%", int((df["Status"] == near).sum()))
 
     def colour(row):
@@ -299,7 +319,7 @@ def render_attendance(con, user):
     st.dataframe(show.style.apply(colour, axis=1).format({"Projected (%)": "{:.1f}",
                                                           "With all letters approved (%)": "{:.1f}"}),
                  hide_index=True, width="stretch")
-    st.download_button("⬇️ Download as CSV", show.to_csv(index=False), file_name="attendance_risk.csv",
+    st.download_button("Download as CSV", show.to_csv(index=False), file_name="attendance_risk.csv",
                        mime="text/csv", key="att_csv")
 
 
@@ -307,7 +327,7 @@ def _athlete_attendance(con, user, floor, relaxed, start, end, known):
     st.subheader("Your attendance after sport absences")
     p = logic.attendance_projection(con, user.athlete_id, date.today())
     if not p["subjects"]:
-        _rule_explainer(floor, relaxed)
+        _rule_explainer(con)
         st.info("Your timetable isn't in the planner yet, so attendance can't be projected.")
         return
     w = p["worst"]
@@ -316,17 +336,17 @@ def _athlete_attendance(con, user, floor, relaxed, start, end, known):
     c2.metric("Days away for sport", p["sport_days"])
     c3.metric("Counted as on-duty", p["on_duty_days"])
     if w["pct"] < relaxed:
-        st.error(f"{w['subject']} would drop below {relaxed}% from sport alone. No relaxation applies below "
-                 f"{relaxed}%, so talk to your proctor now and avoid any more absences.")
+        st.error(f"{w['subject']} could drop below {relaxed}% from sport alone, which is lower than the college "
+                 "usually accepts. Talk to your proctor soon and avoid further absences where you can.")
     elif w["pct"] < floor:
-        st.warning(f"{w['subject']} would be below the required {floor}%. You need the Dean of Student Affairs' "
-                   f"permission (via your letter) for the shortfall to be accepted, and you must stay above {relaxed}%.")
+        st.warning(f"{w['subject']} could end up below {floor}%. A shortfall like this is usually accepted only "
+                   "with the Dean of Student Affairs' permission, so keep your leave letters up to date.")
     if p["uncovered_days"]:
-        st.warning(f"{p['uncovered_days']} sport days don't have a Dean-approved letter yet, so they count as absent. "
-                   "Get your letters signed and approved.")
-    _rule_explainer(floor, relaxed)
-    st.caption(f"Required {floor}%, {relaxed}% with the Dean's permission. Semester {start:%d %b} to {end:%d %b %Y}"
-               + ("" if known else " (estimated)") + ". Other absences aren't included.")
+        st.warning(f"{p['uncovered_days']} sport days don't count as present yet because their letters aren't "
+                   "approved. Get your letters signed and approved.")
+    _rule_explainer(con)
+    st.caption(f"Semester {start:%d %b} to {end:%d %b %Y}" + ("" if known else " (estimated)")
+               + ". Other absences aren't included.")
     df = pd.DataFrame(p["subjects"]).rename(columns={
         "subject": "Subject", "held": "Classes held", "sport_missed": "Missed for sport",
         "on_duty": "Given back (on-duty)", "pct": "Projected (%)"})

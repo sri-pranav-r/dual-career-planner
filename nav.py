@@ -63,8 +63,7 @@ ATHLETE = [
            "Ask for a make-up for each test a tournament makes you miss, and see when it's scheduled.",
            "feature:Make-up tests"),
         _p("attendance", "Attendance", ":material/percent:",
-           "Your projected attendance once tournament days are counted, against the 85% rule and the 75% "
-           "allowed with the Dean's permission.",
+           "Your projected attendance once tournament days are counted, against the college's attendance rule.",
            "feature:Attendance risk"),
         _p("timetable", "Timetable and tests", ":material/table_view:",
            "Import your weekly timetable and add CIE, SEE or lab dates, so clashes are found automatically.",
@@ -93,7 +92,8 @@ ATHLETE = [
            "The data notice you agreed to, a download of everything stored about you, and deletion.",
            "feature:Privacy & data"),
         _p("help", "Help", ":material/help:",
-           "What every page does and how the numbers are worked out.", "core:help"),
+           "What every page does, how the numbers are worked out, and the privacy policy and terms of use.",
+           [("Help", "core:help"), ("Privacy policy", "core:privacy_policy"), ("Terms of use", "core:terms")]),
     ]),
 ]
 
@@ -133,7 +133,7 @@ STAFF = [
         _p("makeups", "Make-up tests", ":material/assignment_late:",
            "Make-up requests for tests missed for sport. Schedule or reject each one.", "feature:Make-up tests"),
         _p("attendance", "Attendance risk", ":material/percent:",
-           "Who could fall below the 85% rule, or the 75% allowed with the Dean's permission, once tournament days are counted.",
+           "Who could fall below the college's attendance rule once tournament days are counted.",
            "feature:Attendance risk"),
         _p("exam_import", "Import exam calendar", ":material/upload_file:",
            "Upload the college calendar once a semester; CIE, SEE and lab dates go to every student in scope.",
@@ -173,7 +173,8 @@ STAFF = [
            "Which athletes agreed to the data notice, and deletion requests to carry out.",
            "feature:Privacy & data"),
         _p("help", "Help", ":material/help:",
-           "What every page does and how the numbers are worked out.", "core:help"),
+           "What every page does, how the numbers are worked out, and the privacy policy and terms of use.",
+           [("Help", "core:help"), ("Privacy policy", "core:privacy_policy"), ("Terms of use", "core:terms")]),
     ]),
 ]
 

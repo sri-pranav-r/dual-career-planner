@@ -25,14 +25,18 @@ Athletes see the data consent notice the first time they sign in. Demo dates mov
 
 ### Before real data goes in
 1. Sign in as `admin` and open **Settings**.
-2. Enter your college's name, attendance rule, semester dates and letter wording.
-3. Under **Switch to real data**, choose a new admin password. This deletes all demo data and every demo login, because their passwords are public.
-4. Import the real roster (**Roster import**). Each athlete's first password is their USN, and they must change it at first sign-in. Passwords need 8+ characters.
+2. Enter your college's name, attendance rule, semester dates and letter wording. The attendance rule is flexible: the expected percentage (default 85%), a lower percentage the Dean can accept for a valid reason (default 75%, can be switched off), and when sport days count as present (after the Dean approves, after the HoD approves, straight away, or never).
+3. Read the **Privacy policy** and **Terms of use** (under Help, and linked from the login page). They use the college name from Settings; edit `legal.py` if your college needs different wording.
+4. Under **Switch to real data**, choose a new admin password. This deletes all demo data and every demo login, because their passwords are public.
+5. Import the real roster (**Roster import**). Each athlete's first password is their USN, and they must change it at first sign-in. Passwords need 8+ characters.
 
 ### QR codes on letters
 When a proctor scans the QR code on a letter with a phone, it has to open this app.
 - **Automatic.** The app detects the laptop's Wi-Fi address (e.g. `http://192.168.1.20:8501`). The phone must be on the same Wi-Fi.
 - **Manual.** Set the address in **Settings → App address**, or with the `PLANNER_BASE_URL` environment variable, for example when the app is deployed to Streamlit Cloud. Settings shows a test QR you can scan.
+
+### Deploying with your own address
+On Streamlit Cloud the app gets a `*.streamlit.app` address. To use the college's own domain, either ask the college IT team to point a subdomain at a server that runs the app (for example behind nginx with HTTPS), or keep Streamlit Cloud and set a redirect from the college domain. Whichever address people use, enter it in **Settings → App address** so QR codes on letters open it. Streamlit's main menu, deploy button and footer are hidden by the app; the small "Hosted with Streamlit" badge that Streamlit Cloud adds outside the app can't be removed from inside it.
 
 ### Staying signed in
 Refreshing keeps you signed in, because a login token is kept in the page address (`?s=...`). It lasts 12 hours, or 30 days if you tick "Keep me signed in". Don't share a signed-in page's address: anyone who opens it is signed in as you until it expires or you sign out.
@@ -77,7 +81,9 @@ Every role starts on **Home**. It shows what needs your attention, such as a let
 - `data.py`: schema, migrations, readers and writers, events, the demo seed, and the switch to real data.
 - `auth.py`: login, roles, permissions, and remember-me sessions.
 - `settings.py`: college rules, letter wording, and the app address.
-- `letterdoc.py`: the one path for producing letters (wording plus QR).
+- `letterdoc.py`: the one path for producing letters (wording plus QR) and their email version.
+- `legal.py`: the privacy policy and terms of use.
+- `assets/favicon.png`: the browser tab icon.
 - `roster.py`: roster import.
 - `hooks.py`: the event bus.
 - `features/`: modules that plug in through `INTERFACES.md`:

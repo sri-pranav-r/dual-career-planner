@@ -42,3 +42,9 @@ def test_current_page_falls_back_to_the_first():
     assert nav.current(pages, {"p": "clashes"}).key == "clashes"
     assert nav.current(pages, {"p": "users"}).key == "home"
     assert nav.current(pages, {}).key == "home"
+
+
+def test_help_has_privacy_and_terms_for_every_role():
+    for role in ("athlete", "coach", "faculty", "admin"):
+        help_page = next(p for _, items in nav.catalog(role) for p in items if p.key == "help")
+        assert [src for _, src in help_page.parts] == ["core:help", "core:privacy_policy", "core:terms"]

@@ -20,7 +20,9 @@ DEFAULTS: dict = {
     # attendance
     "attendance_min_pct": 85,
     "attendance_relaxed_pct": 75,     # lowest allowed with a valid reason (Dean's permission)
+    "attendance_relaxed_enabled": True,
     "on_duty_counts_as_present": True,
+    "on_duty_from": "dean",           # when sport days start counting as present: dean | hod | always
     "max_on_duty_days": 0,            # 0 = no cap
     "semester_start": "",             # ISO date; "" = unknown
     "semester_end": "",
@@ -30,10 +32,21 @@ DEFAULTS: dict = {
     "base_url": "",                   # "" = auto-detect
 }
 
+# When sport days start counting as present, in the order shown in Settings.
+ON_DUTY_RULES = {
+    "dean": "Once the Dean of Student Affairs approves the letter",
+    "hod": "Once the HoD approves the letter (before the Dean)",
+    "always": "Straight away, without waiting for a letter",
+    "never": "Never: sport days count as absent",
+}
+ON_DUTY_FROM = ("dean", "hod", "always")
+
 LABELS = {
-    "attendance_min_pct": "Required attendance (%)",
+    "attendance_min_pct": "Expected attendance (%)",
     "attendance_relaxed_pct": "Lowest attendance allowed with a valid reason (%)",
+    "attendance_relaxed_enabled": "Allow a lower attendance with the Dean's permission",
     "on_duty_counts_as_present": "Approved sport absences count as present (on-duty)",
+    "on_duty_from": "Sport days count as present",
     "max_on_duty_days": "Maximum on-duty days per semester (0 = no limit)",
     "semester_start": "Semester start date",
     "semester_end": "Semester end date",
@@ -74,6 +87,8 @@ def set(con, key, value):  # noqa: A001 - mirrors get()
             raise ValueError(f"{LABELS[key]} can't be negative.")
     else:
         value = str(value).strip()
+        if key == "on_duty_from" and value not in ON_DUTY_FROM:
+            raise ValueError(f"Choose one of: {', '.join(ON_DUTY_FROM)}.")
         if key == "letter_addressee" and value not in core.ADDRESSEES:
             raise ValueError(f"The letter goes to one of: {', '.join(core.ADDRESSEES)}.")
     data.set_meta(con, f"setting.{key}", json.dumps(value))
@@ -84,9 +99,26 @@ def all(con) -> dict:  # noqa: A001
 
 
 def attendance_floors(con) -> tuple[int, int]:
-    """(required, relaxed). The relaxed floor never sits above the required one."""
+    """(required, relaxed). Relaxed equals required when the relaxation is off, and is never above it."""
     required = get(con, "attendance_min_pct")
+    if not get(con, "attendance_relaxed_enabled"):
+        return required, required
     return required, min(get(con, "attendance_relaxed_pct"), required)
+
+
+def on_duty_rule(con) -> str:
+    """When sport days count as present: "dean", "hod", "always", or "never"."""
+    if not get(con, "on_duty_counts_as_present"):
+        return "never"
+    return get(con, "on_duty_from")
+
+
+def set_on_duty_rule(con, rule: str) -> None:
+    if rule not in ON_DUTY_RULES:
+        raise ValueError(f"Choose one of: {', '.join(ON_DUTY_RULES)}.")
+    set(con, "on_duty_counts_as_present", rule != "never")
+    if rule != "never":
+        set(con, "on_duty_from", rule)
 
 
 def letter_template(con) -> dict:

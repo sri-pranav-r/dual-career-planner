@@ -311,4 +311,41 @@ def test_risk_list_separates_shortfall_from_below_relaxed(con):
     settings.set(con, "attendance_relaxed_pct", 99)
     df = logic.attendance_risk(con, coach, TODAY, only_at_risk=True)
     assert set(df["Status"]) == {"Below 99%"}
-    assert df["What to do"].str.startswith("Below even 99%").all()
+    assert df["What to do"].str.startswith("Below 99%, the lowest").all()
+
+
+def test_relaxed_floor_can_be_switched_off(con):
+    settings.set(con, "attendance_relaxed_enabled", False)
+    assert settings.attendance_floors(con) == (85, 85)
+    assert logic.attendance_band(80, *settings.attendance_floors(con)) == "Below 85%"
+
+
+def test_when_sport_days_count_follows_settings(con):
+    _semester(con)
+    aid, tid = aarav(con), cricket(con)
+    lid = letters.create_letter(con, aid, tid)
+    for _ in range(3):
+        letters.advance_letter(con, lid)                      # HoD approved, Dean not yet
+    assert settings.on_duty_rule(con) == "dean"
+    assert logic.attendance_projection(con, aid, TODAY)["on_duty_days"] == 0
+    settings.set_on_duty_rule(con, "hod")
+    assert logic.attendance_projection(con, aid, TODAY)["on_duty_days"] == 6
+    settings.set_on_duty_rule(con, "never")
+    p = logic.attendance_projection(con, aid, TODAY)
+    assert p["on_duty_days"] == 0 and settings.get(con, "on_duty_counts_as_present") is False
+    settings.set_on_duty_rule(con, "always")                  # no letter needed at all
+    other = [a for a in data.entries(con, tid) if a != aid][0]
+    p = logic.attendance_projection(con, other, TODAY)
+    assert p["sport_days"] and p["uncovered_days"] == 0
+    with pytest.raises(ValueError):
+        settings.set_on_duty_rule(con, "sometimes")
+
+
+def test_rule_text_follows_settings(con):
+    from features.squad import ui
+    t = ui.rule_text(con)
+    assert "85%" in t and "75%" in t and "Dean of Student Affairs has approved" in t and "—" not in t
+    settings.set(con, "attendance_relaxed_enabled", False)
+    settings.set_on_duty_rule(con, "always")
+    t = ui.rule_text(con)
+    assert "75%" not in t and "straight away" in t

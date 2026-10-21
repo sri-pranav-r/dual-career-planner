@@ -149,7 +149,9 @@ settings.base_url(con) -> str           # where the app is reachable, for links 
 |---|---|---|
 | `attendance_min_pct` | 85 | the required attendance (%) |
 | `attendance_relaxed_pct` | 75 | the lowest attendance (%) the Dean of Student Affairs can accept for a valid reason; `settings.attendance_floors(con)` returns (required, relaxed) |
-| `on_duty_counts_as_present` | True | whether sport absences with an approved letter count as present |
+| `attendance_relaxed_enabled` | True | off means a single attendance line (`attendance_floors` returns required twice) |
+| `on_duty_counts_as_present` | True | whether sport absences can count as present at all |
+| `on_duty_from` | "dean" | when they start counting: "dean", "hod" or "always". Read both through `settings.on_duty_rule(con)` ("dean", "hod", "always" or "never") and write with `settings.set_on_duty_rule` |
 | `max_on_duty_days` | 0 | the cap on on-duty days per semester (0 = no cap) |
 | `semester_start` / `semester_end` | "" | ISO dates. Empty means unknown, so assume the last 120 days |
 | `college_name` | "Your College" | |
@@ -168,7 +170,7 @@ letterdoc.make_email(con, athlete: dict, tournament: dict, clashes=None) -> dict
     # the same text as an email: {to, cc, subject, body}
 ```
 
-Letter stages keep their stored keys; the labels follow the college's process: drafted, `ped_signed` (PED confirmed), `proctor_signed`, `hod_approved`, `submitted` (Dean approved). Only a Dean-approved letter makes sport days count as present.
+Letter stages keep their stored keys; the labels follow the college's process: drafted, `ped_signed` (PED confirmed), `proctor_signed`, `hod_approved`, `submitted` (Dean approved). By default only a Dean-approved letter makes sport days count as present (see `on_duty_from`).
 
 ### Login sessions
 A refresh no longer signs people out. Core keeps a signed session token in the URL query param `s`.

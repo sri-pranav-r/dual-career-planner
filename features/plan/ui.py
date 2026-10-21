@@ -11,9 +11,11 @@ import data
 
 from . import logic
 
-_ZONE_ICON = {"High risk": "🔴", "Caution": "🟠", "Sweet spot": "🟢", "Under-trained": "🔵", "No data yet": "⚪"}
-_RISK_ICON = {"high": "🔴", "moderate": "🟠", "low": "🟢"}
-_AREA_ICON = {"training": "🏋️", "study": "📖", "academic": "🎓"}
+_ZONE_ICON = {"High risk": ":red[:material/circle:]", "Caution": ":orange[:material/circle:]",
+              "Sweet spot": ":green[:material/circle:]", "Under-trained": ":blue[:material/circle:]",
+              "No data yet": ":gray[:material/radio_button_unchecked:]"}
+_RISK_ICON = {"high": ":red[:material/circle:]", "moderate": ":orange[:material/circle:]", "low": ":green[:material/circle:]"}
+_AREA_ICON = {"training": ":material/fitness_center:", "study": ":material/menu_book:", "academic": ":material/school:"}
 
 
 def _today() -> date:
@@ -83,7 +85,7 @@ def _summary(plan: dict, today: date):
                  "no_data": "no wellness check-ins yet"}[rc["state"]]
         lines.append(f"- Recovery: {rtext}")
         if sport["injured"]:
-            lines.append("- 🩹 Currently out injured")
+            lines.append("- :material/healing: Currently out injured")
         st.markdown("\n".join(lines))
 
 
@@ -117,26 +119,26 @@ def _day_cards(plan: dict, today: date):
     for d in plan["days"]:
         on = []
         if d["away"] == "tournament":
-            on.append("🏆 Tournament")
+            on.append(":material/emoji_events: Tournament")
         elif d["away"] == "travel":
-            on.append("✈️ Travel")
-        on += [f"📝 {t['title']}" for t in d["tests"]]
+            on.append(":material/directions_bus: Travel")
+        on += [f":material/edit_note: {t['title']}" for t in d["tests"]]
         if d["classes"]:
-            on.append(f"📚 {len(d['classes'])} class{'es' if len(d['classes']) > 1 else ''}")
+            on.append(f":material/class: {len(d['classes'])} class{'es' if len(d['classes']) > 1 else ''}")
         head = "Today" if d["date"] == today else "Tomorrow" if d["date"] == today + timedelta(days=1) else \
             d["date"].strftime("%a %d %b")
         lines = [f"**{head}** · {', '.join(on) or 'Free day'}"]
         tr, sd, ac = d["training"], d["study"], d["academic"]
         if tr:
-            lines.append(f"🏋️ **{logic.LEVEL_LABELS[tr['level']]}**: {tr['text']} `{tr['rule_id']}`")
+            lines.append(f":material/fitness_center: **{logic.LEVEL_LABELS[tr['level']]}**: {tr['text']} `{tr['rule_id']}`")
             if d["also"]:
                 lines.append(f"<small>Overrides: {', '.join(sorted({a['rule'] for a in d['also']}))}</small>")
         elif d["away"] is None:
-            lines.append("🏋️ Train as your coach planned")
+            lines.append(":material/fitness_center: Train as your coach planned")
         if sd:
-            lines.append(f"📖 {sd['text']} `{sd['rule_id']}`")
+            lines.append(f":material/menu_book: {sd['text']} `{sd['rule_id']}`")
         if ac:
-            lines.append(f"🎓 {ac['text']} `{ac['rule_id']}`")
+            lines.append(f":material/school: {ac['text']} `{ac['rule_id']}`")
         with st.container(border=True):
             st.markdown("  \n".join(lines), unsafe_allow_html=True)
 

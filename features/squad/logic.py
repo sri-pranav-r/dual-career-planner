@@ -550,8 +550,9 @@ def create_with_selection(con, user, name, sport, venue, start, end, travel_befo
 # ---------------------------------------------------------------------------
 
 SEMESTER_DAYS = 120
-# Attendance is compensated once the Dean of Student Affairs has given permission.
-ON_DUTY_STAGES = ("submitted",)
+# Letter stages after which sport days count as present, per settings.on_duty_rule
+# ("always" needs no letter; "never" gives nothing back). Dean approved is stored as "submitted".
+ON_DUTY_STAGES = {"dean": ("submitted",), "hod": ("hod_approved", "submitted")}
 
 
 def semester_window(con, today: date | None = None) -> tuple[date, date, bool]:
@@ -574,7 +575,10 @@ def semester_window(con, today: date | None = None) -> tuple[date, date, bool]:
 
 
 def _sport_days(con, aid, start, end, extra_windows=(), all_on_duty=False) -> dict[date, bool]:
-    """Each day away for sport inside the semester -> whether it has an approved letter (on-duty)."""
+    """Each day away for sport inside the semester -> whether it counts as on-duty under the settings."""
+    rule = settings.on_duty_rule(con)
+    all_on_duty = all_on_duty or rule == "always"
+    stages = ON_DUTY_STAGES.get(rule, ())
     days: dict[date, bool] = {}
 
     def add(first, last, ok):
@@ -586,7 +590,7 @@ def _sport_days(con, aid, start, end, extra_windows=(), all_on_duty=False) -> di
     for _, t in data.tournaments_for(con, aid).iterrows():
         first, last = core.away_window(t.to_dict())
         lt = letters.find_letter(con, aid, int(t["id"]))
-        ok = all_on_duty or bool(lt and lt["stage"] in ON_DUTY_STAGES and not lt["rejected"] and not lt["needs_redo"])
+        ok = all_on_duty or bool(lt and lt["stage"] in stages and not lt["rejected"] and not lt["needs_redo"])
         add(first, last, ok)
     for first, last in extra_windows:
         add(_d(first), _d(last), all_on_duty)
@@ -597,13 +601,13 @@ def attendance_projection(con, athlete_id: int, today: date | None = None, extra
                           other_absence_pct: float = 0, all_on_duty: bool = False) -> dict:
     """
     Projected end-of-semester attendance per timetable subject. A class is lost to sport when it falls
-    on a day away. If settings say on-duty counts as present, days with a Dean-approved letter
-    are given back, up to the on-duty cap, earliest first. other_absence_pct is an
+    on a day away. If settings say on-duty counts as present, days whose letter has reached the
+    stage settings.on_duty_rule asks for (or every sport day, for "always") are given back, up to the on-duty cap, earliest first. other_absence_pct is an
     allowance for ordinary absences on top. extra_windows adds hypothetical trips (squad preview).
     """
     start, end, known = semester_window(con, today)
     floor, relaxed = settings.attendance_floors(con)
-    od_counts = settings.get(con, "on_duty_counts_as_present")
+    od_counts = settings.on_duty_rule(con) != "never"
     cap = settings.get(con, "max_on_duty_days")
     away = _sport_days(con, athlete_id, start, end, extra_windows, all_on_duty)
     credited = set()
@@ -665,7 +669,8 @@ def attendance_risk(con, user, today: date | None = None, margin: float = 5, oth
             "Missed for sport", "Given back (on-duty)", "Projected (%)", "With all letters approved (%)",
             "Status", "What to do"]
     floor, relaxed = settings.attendance_floors(con)
-    od_counts = settings.get(con, "on_duty_counts_as_present")
+    od_counts = settings.on_duty_rule(con) != "never"
+    approver = "the HoD" if settings.on_duty_rule(con) == "hod" else "the Dean of Student Affairs"
     rows = []
     for aid in auth.visible_athlete_ids(con, user):
         p = attendance_projection(con, aid, today, other_absence_pct=other_absence_pct)
@@ -678,14 +683,15 @@ def attendance_risk(con, user, today: date | None = None, margin: float = 5, oth
         if status == "OK":
             todo = "-"
         elif letters_help and best["pct"] >= floor:
-            todo = "Get the pending letters approved by the Dean of Student Affairs"
+            todo = f"Get the pending letters approved by {approver}"
         elif letters_help and best["pct"] >= relaxed:
             todo = (f"Get the pending letters approved; the rest of the shortfall below {floor}% "
                     "needs the Dean's permission")
         elif w["pct"] >= relaxed:
-            todo = f"Below {floor}% needs the Dean's permission: limit further absences"
+            todo = f"Below {floor}% usually needs the Dean's permission: limit further absences"
         else:
-            todo = f"Below even {relaxed}%: no relaxation applies. Stop further absences and see the proctor"
+            todo = (f"Below {relaxed}%, the lowest the college usually accepts: limit further absences "
+                    "and talk to the proctor")
         a = data.athlete(con, aid)
         rows.append({"athlete_id": aid, "Athlete": a["name"], "USN": a["usn"], "Sport": a["sport"], "Dept": a["dept"],
                      "Sem": a["sem"], "Worst subject": w["subject"], "Classes held": w["held"],
