@@ -12,7 +12,7 @@ features/<name>/
   schema.sql      # optional: CREATE TABLE IF NOT EXISTS only, tables prefixed with <name>_
   logic.py        # functions taking `con` (sqlite3.Connection); no streamlit import
   ui.py           # streamlit render functions
-  test_<name>.py  # pytest; use data.connect(":memory:") + data.seed(con)
+  test_<name>.py  # pytest; use data.connect(":memory:") + testkit.seed(con)
   README.md       # a few lines: what it does, tables it owns
 ```
 
@@ -66,7 +66,6 @@ A class is identified by `(dept, sem, section)`. `sem` is text like `"3rd"`. A m
 
 ```python
 data.connect(path=None)                      # path or env PLANNER_DB or planner.db; ":memory:" for tests
-data.seed(con, today=None)                   # demo data incl. demo user accounts
 data.athletes(con) / data.athlete(con, athlete_id) / data.athlete_by_usn(con, usn)
 data.athletes_in_class(con, dept, sem, section=None) -> DataFrame
 data.timetable(con, athlete_id) / data.events(con, athlete_id)
@@ -124,13 +123,13 @@ Features can emit their own events. Name them `<feature>_<something>` and list t
 
 Run tests from the planner folder: `python3 -m pytest -q`. Use `data.connect(":memory:")` in tests. Never write to `planner.db` in the shared folder.
 
-The demo accounts `data.seed` creates:
-- Athletes: username = USN, password = USN.
-- Coach: `coach.cricket` / `coach`.
-- PED: `ped` / `ped`.
-- Proctor: `proctor.cse` / `proctor`.
-- HoD: `hod.cse` / `hod`.
-- Admin: `admin` / `admin`.
+`testkit.seed(con, today=None)` fills a test database with made-up athletes, tournaments, logs and logins
+(tests only; the app never loads it). Every fixture login uses the password `testkit.PASSWORD`:
+- Athletes: username = USN.
+- Coach: `coach.cricket`. PED: `ped`. Proctor: `proctor.cse`. HoD: `hod.cse`. Admin: `admin`.
+
+A real database starts empty. Never create accounts with a fixed password in feature code: use
+`auth.temporary_password()` with `must_change_password=True`.
 
 ## 6. Additions for v3 (the core thread is implementing these now; signatures are fixed)
 

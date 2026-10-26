@@ -12,6 +12,7 @@ import hooks
 import settings
 from features.letters import logic as letters
 from features.squad import logic
+import testkit
 
 TODAY = date(2026, 9, 28)
 HERE = Path(__file__).parent
@@ -22,7 +23,7 @@ def con():
     c = data.connect(":memory:")
     c.executescript((HERE.parent / "letters" / "schema.sql").read_text())
     c.executescript((HERE / "schema.sql").read_text())
-    data.seed(c, today=TODAY)
+    testkit.seed(c, today=TODAY)
     hooks.clear()
     hooks.on("tournament_updated", logic.on_tournament_changed)
     hooks.on("entries_changed", logic.on_tournament_changed)

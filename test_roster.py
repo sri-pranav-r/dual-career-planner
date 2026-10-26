@@ -8,12 +8,13 @@ import pytest
 import auth
 import data
 import roster
+import testkit
 
 
 @pytest.fixture
 def con():
     c = data.connect(":memory:")
-    data.seed(c, date(2026, 9, 28))
+    testkit.seed(c, date(2026, 9, 28))
     yield c
     c.close()
 
@@ -60,9 +61,13 @@ def test_apply_creates_and_updates_with_logins(con):
     rows, _ = roster.validate(roster.parse(SHEET.encode(), "roster.csv"))
     res = roster.apply(con, rows)
     assert (res["created"], res["updated"], res["accounts"]) == (1, 1, 1)
-    # new athlete can sign in with USN and must change password
-    u = auth.authenticate(con, "1RV25CS200", "1RV25CS200")
+    # the new athlete gets a random one-time password, never their USN, and must change it
+    (cred,) = res["credentials"]
+    assert cred["usn"] == "1RV25CS200" and cred["password"] != "1RV25CS200"
+    assert auth.authenticate(con, "1RV25CS200", "1RV25CS200") is None
+    u = auth.authenticate(con, "1RV25CS200", cred["password"])
     assert u.role == "athlete" and u.must_change_password and u.section == "B"
+    assert b"One-time password" in roster.credentials_csv(res["credentials"])
     # existing athlete: name updated, blank proctor did not wipe the stored one
     a = data.athlete_by_usn(con, "1RV25CS012")
     assert a["name"] == "Aarav K." and a["proctor"] == "Dr. Meena R"
@@ -72,5 +77,9 @@ def test_reimport_is_idempotent(con):
     rows, _ = roster.validate(roster.parse(SHEET.encode(), "roster.csv"))
     roster.apply(con, rows)
     res = roster.apply(con, rows)
-    assert (res["created"], res["accounts"]) == (0, 0)
+    assert (res["created"], res["accounts"], res["credentials"]) == (0, 0, [])
     assert len(data.athletes(con)) == 11
+
+
+def test_template_has_no_example_athlete():
+    assert roster.TEMPLATE_CSV.strip().count("\n") == 0

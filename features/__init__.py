@@ -14,11 +14,13 @@ so one broken module never takes the app down.
 from __future__ import annotations
 
 import importlib
+import logging
 import traceback
 from pathlib import Path
 
 _DIR = Path(__file__).parent
 load_errors: dict[str, str] = {}
+log = logging.getLogger("planner")
 _loaded: list[dict] | None = None
 
 # Tab order across features; unknown names go last, alphabetically.
@@ -37,6 +39,8 @@ def apply_schemas(con) -> None:
             try:
                 con.executescript(sql.read_text())
             except Exception:  # noqa: BLE001
+                if d.name not in load_errors:
+                    log.exception("Feature %s: schema.sql failed", d.name)
                 load_errors[d.name] = f"schema.sql failed:\n{traceback.format_exc()}"
 
 
@@ -63,6 +67,7 @@ def load_all(force: bool = False) -> list[dict]:
                 "hooks": {k: _resolve(d.name, v) for k, v in f.get("hooks", {}).items()},
             })
         except Exception:  # noqa: BLE001
+            log.exception("Feature %s failed to load; its pages are hidden", d.name)
             load_errors[d.name] = traceback.format_exc()
     _loaded = out
     return out

@@ -1,8 +1,11 @@
 planner.db
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 __pycache__/
 *.pyc
 .pytest_cache/
 .env
 .streamlit/secrets.toml
+backups/

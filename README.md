@@ -1,54 +1,91 @@
 # Dual-Career Planner for College Athletes
 
-A planner for college athletes balancing sport and studies. It does four jobs:
+A planner for college athletes balancing sport and studies, for the athletes themselves, their coaches, the Physical Education Director (PED) and the faculty who approve their leave. It:
 - flags tournament-vs-exam clashes
 - produces the leave and attendance-compensation letter to the Dean of Student Affairs (or the Principal), copied to the student's faculty, with an email version of the same text, and tracks its sign-off (PED confirms, proctor and HoD sign, the Dean approves), with QR verification for faculty
-- projects attendance against the college rule: 85% is required, and with a valid reason the Dean can accept down to 75%
+- projects attendance against the college rule (by default 85% required, and down to 75% with the Dean's permission; both are set in the app)
 - reminds athletes before tournaments
 - tracks training load, injuries and wellness, without wearables
 
-## Run
+It is a Streamlit app with a single SQLite database. A new deployment starts empty: there are no sample records, no built-in accounts and no default passwords.
+
+## Deploy on Streamlit Community Cloud
+
+1. **Create the app.** At [share.streamlit.io](https://share.streamlit.io), choose **Create app**, pick this repository, branch `main` and main file `app.py`. Python 3.11 or newer.
+2. **Add secrets** before the first start: **Advanced settings → Secrets** (or later, **Manage app → Settings → Secrets**). Paste TOML like this, with your own values:
+
+   ```toml
+   PLANNER_SETUP_CODE = "pick-a-long-random-phrase"
+   PLANNER_SECRET = "another-long-random-string-for-letter-qr-codes"
+   PLANNER_BASE_URL = "https://your-app-name.streamlit.app"
+   ```
+
+   | Secret | Needed | What it does |
+   |---|---|---|
+   | `PLANNER_SETUP_CODE` | Recommended | Asked for when creating the first admin, so nobody else who finds the address first can. Without it, the app writes a fresh code to the log at every start. |
+   | `PLANNER_SECRET` | Recommended | Signs the QR codes on letters. Keep it the same forever: if it changes, letters printed earlier no longer verify. Without it, a key is generated and kept in the database (and travels with backups). |
+   | `PLANNER_BASE_URL` | Yes, once you know the address | The https address people open. QR codes on letters and links in reminders point here. It can also be set in **Settings → App address**. |
+   | `PLANNER_DB` | Self-hosting only | Where the database file lives (default `planner.db` next to `app.py`). |
+   | `PLANNER_REMINDERS_LIVE`, `PLANNER_REMINDER_PROVIDER`, `TWILIO_*`, `PLANNER_REMINDER_WEBHOOK_*` | Optional | Sending reminders by SMS or WhatsApp. See [Reminders](#reminders-whatsapp-or-sms). |
+
+   Any of these can also be an environment variable; an environment variable wins over a secret.
+3. **Deploy**, then open the app. It shows **Set up the planner**.
+4. **Create the first admin.** Enter the setup code (the `PLANNER_SETUP_CODE` you chose, or the code on the `Planner setup code:` line in **Manage app → logs**), the college name, a username such as `sports.office`, and a password of at least 12 characters. You are signed in as that admin.
+5. **Set the college up** in **Settings**: attendance rules, semester dates, letter wording, and the app address if `PLANNER_BASE_URL` isn't set. Read the **Privacy policy** and **Terms of use** (Help, and the login page); they use the college name from Settings. Edit `legal.py` if your college needs different wording.
+6. **Add staff** on **Users**: coaches (a coach with no sport is the PED), faculty (teacher, proctor or HoD, scoped to a department and optionally a semester and section) and other admins. Each new account gets a one-time password, shown once, to hand over privately.
+7. **Import the roster** on **Roster import** (.csv or .xlsx; download the blank template there). Every new athlete gets a login: their USN as the username and a one-time password. The passwords are shown once after the import, with a CSV download, so you can hand them out.
+8. **Download a backup** (Settings → Backup and restore). See the next section before you rely on the app.
+
+Everyone signs in with the one-time password they were given and must choose their own (10+ characters; 12+ for admins) before they can continue.
+
+### Keeping the data: backups
+Streamlit Community Cloud does not keep files between restarts. The database is lost when the app is redeployed, rebooted, or put to sleep after a few days without visitors. So:
+- An admin should download a backup at least once a week and after big changes, in **Settings → Backup and restore**. Home reminds admins when the last backup is more than 7 days old. The backup is the whole database (personal and health data included), so keep it somewhere private.
+- After the app has lost its data, it shows **Set up the planner** again. Choose **Restore a backup**, enter the setup code and upload the latest backup. Everyone's accounts come back as they were in the backup.
+- For a pilot with real athletes, prefer a host with a persistent disk (below), or at least keep the app awake and the backups regular.
+
+### Hosting on a server with a persistent disk
+Any machine that runs Python works (a college server, or a cloud VM):
+
+    pip install -r requirements.txt
+    export PLANNER_DB=/var/lib/planner/planner.db
+    export PLANNER_SETUP_CODE=...   PLANNER_SECRET=...   PLANNER_BASE_URL=https://planner.example.edu
+    streamlit run app.py --server.port 8501
+
+Put it behind a reverse proxy (for example nginx) that serves HTTPS and forwards WebSocket connections. Back up the database file with a nightly copy, or download backups from Settings. The folder in `PLANNER_DB` is created if it is missing.
+
+### Custom domain
+On Streamlit Cloud the app gets a `*.streamlit.app` address. To use the college's own domain, either run it on a server as above and point a subdomain at it, or keep Streamlit Cloud and have the college domain redirect to it. Whichever address people use, put it in `PLANNER_BASE_URL` (or Settings → App address) so QR codes on letters open it. Streamlit's own menu, deploy button and footer are hidden by the app; the small "Hosted with Streamlit" badge that Streamlit Cloud adds outside the app can't be removed from inside it.
+
+## Security
+- **No default accounts or passwords.** The first admin is created at setup, behind the setup code. Everyone else starts with a random one-time password and must change it at first sign-in. An admin can reset a password (Users), which makes a new one-time password and signs the person out everywhere.
+- **Passwords** are stored as PBKDF2-SHA256 hashes with a per-user salt. They need 10+ characters (12+ for admins), can't contain the username and can't be a common password.
+- **Lock-out.** Five wrong passwords in a row lock that username for 15 minutes. The setup code has the same limit.
+- **Sign-in sessions** use a random token kept in a cookie (SameSite=Strict, Secure on https). Only a hash of it is stored. It lasts 12 hours, or 30 days with "Keep me signed in". Links people copy never contain it. Changing your password signs out your other devices; **Account → Sign out on every device** does it on request.
+- **The last admin** can't be deleted or demoted.
+- **Errors** show a short message with a reference; the details go to the server log, never to the page.
+- **Secrets** come from Streamlit secrets or environment variables only. `planner.db`, `.streamlit/secrets.toml` and `.env` are in `.gitignore`; never commit them.
+- **Letters** carry a signed QR code. Faculty scanning it see who the letter is for and can approve it after signing in.
+
+## Run it on your own computer
     pip install -r requirements.txt
     streamlit run app.py
 
-The app opens at http://localhost:8501 in **demo mode**, with 10 demo athletes. The login page lists the demo accounts:
+It opens at http://localhost:8501 on an empty database (`planner.db`) and asks for the setup code, which it prints in the terminal. To start again from nothing, stop the app and delete `planner.db`.
 
-| Who | Username | Password |
-|---|---|---|
-| Athlete | `1RV25CS012` (any demo USN) | same as the USN |
-| Coach (Cricket) | `coach.cricket` | `planner-demo` |
-| Physical Education Director | `ped` | `planner-demo` |
-| Proctor / HoD (CSE) | `proctor.cse` / `hod.cse` | `planner-demo` |
-| Admin | `admin` | `planner-demo` |
+A database made by a version before v7 held made-up sample records and logins with public passwords. The app refuses to use one: it offers a copy to download and then clears it.
 
-Athletes see the data consent notice the first time they sign in. Demo dates move forward automatically, so there are always upcoming tournaments.
+### QR codes on a local network
+When a proctor scans the QR code on a letter, it has to open this app. On a laptop, the app detects its Wi-Fi address (e.g. `http://192.168.1.20:8501`) and the phone must be on the same Wi-Fi. Settings shows a test QR you can scan.
 
-### Before real data goes in
-1. Sign in as `admin` and open **Settings**.
-2. Enter your college's name, attendance rule, semester dates and letter wording. The attendance rule is flexible: the expected percentage (default 85%), a lower percentage the Dean can accept for a valid reason (default 75%, can be switched off), and when sport days count as present (after the Dean approves, after the HoD approves, straight away, or never).
-3. Read the **Privacy policy** and **Terms of use** (under Help, and linked from the login page). They use the college name from Settings; edit `legal.py` if your college needs different wording.
-4. Under **Switch to real data**, choose a new admin password. This deletes all demo data and every demo login, because their passwords are public.
-5. Import the real roster (**Roster import**). Each athlete's first password is their USN, and they must change it at first sign-in. Passwords need 8+ characters.
-
-### QR codes on letters
-When a proctor scans the QR code on a letter with a phone, it has to open this app.
-- **Automatic.** The app detects the laptop's Wi-Fi address (e.g. `http://192.168.1.20:8501`). The phone must be on the same Wi-Fi.
-- **Manual.** Set the address in **Settings → App address**, or with the `PLANNER_BASE_URL` environment variable, for example when the app is deployed to Streamlit Cloud. Settings shows a test QR you can scan.
-
-### Deploying with your own address
-On Streamlit Cloud the app gets a `*.streamlit.app` address. To use the college's own domain, either ask the college IT team to point a subdomain at a server that runs the app (for example behind nginx with HTTPS), or keep Streamlit Cloud and set a redirect from the college domain. Whichever address people use, enter it in **Settings → App address** so QR codes on letters open it. Streamlit's main menu, deploy button and footer are hidden by the app; the small "Hosted with Streamlit" badge that Streamlit Cloud adds outside the app can't be removed from inside it.
-
-### Staying signed in
-Refreshing keeps you signed in, because a login token is kept in the page address (`?s=...`). It lasts 12 hours, or 30 days if you tick "Keep me signed in". Don't share a signed-in page's address: anyone who opens it is signed in as you until it expires or you sign out.
-
-### Reminders (WhatsApp/SMS)
-Reminders always appear in the athlete's in-app Notifications. Nothing is sent outside the app unless `PLANNER_REMINDERS_LIVE=1` is set and a provider is configured:
-- **Twilio:** `PLANNER_REMINDER_PROVIDER=twilio`, plus `TWILIO_*`.
-- **Webhook:** `PLANNER_REMINDER_PROVIDER=webhook`, plus `PLANNER_REMINDER_WEBHOOK_URL`.
+### Reminders (WhatsApp or SMS)
+Reminders always appear in the athlete's in-app Notifications. Nothing is sent outside the app unless `PLANNER_REMINDERS_LIVE=1` is set and a provider is configured, as secrets or environment variables:
+- **Twilio:** `PLANNER_REMINDER_PROVIDER=twilio`, plus `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_SMS_FROM` or `TWILIO_WHATSAPP_FROM`.
+- **Webhook:** `PLANNER_REMINDER_PROVIDER=webhook`, plus `PLANNER_REMINDER_WEBHOOK_URL` (and optionally `PLANNER_REMINDER_WEBHOOK_TOKEN`).
 
 The athlete must also opt in. Reminders run once a day on the first page load, or from cron with `python3 -m features.reminders.run`. See `features/reminders/README.md`.
 
-### Optional
+### Photo timetables
 Photo timetables need the Tesseract OCR program (`apt install tesseract-ocr`, `brew install tesseract`, or the Windows installer). Streamlit Cloud installs it from `packages.txt`.
 
 ## Finding your way around
@@ -72,20 +109,23 @@ Every role starts on **Home**. It shows what needs your attention, such as a let
 - **Faculty** (teacher, proctor or HoD): their department, optionally narrowed to a semester and section.
   - Home, Upcoming absences, Athlete detail (clashes and letters only), Calendar, Letters, Make-up tests, Attendance risk, Import exam calendar, Import timetable, Semester summary, Export and Help.
   - Faculty never see injuries, wellness or training load.
-- **Admin:** everything, plus Users, Settings, and Privacy and consent (the consent overview and carrying out data-deletion requests).
+- **Admin:** everything, plus Users, Settings (including backup and restore), and Privacy and consent (the consent overview and carrying out data-deletion requests).
 
 ## Files
-- `app.py`: the Streamlit UI: Home pages, the core screens, and routing by role.
+- `app.py`: the Streamlit UI: first-run setup, Home pages, the core screens, and routing by role.
+- `firstrun.py`: the setup code and creating the first admin (or restoring a backup) on an empty database.
+- `config.py`: deployment settings from environment variables or Streamlit secrets.
 - `nav.py`: the menu. Which pages each role gets, their sections, and the line at the top of each page.
 - `core.py`: clash detection, session-RPE and ACWR, and the letter .docx.
-- `data.py`: schema, migrations, readers and writers, events, the demo seed, and the switch to real data.
-- `auth.py`: login, roles, permissions, and remember-me sessions.
+- `data.py`: schema, migrations, readers and writers, events, backup and restore.
+- `auth.py`: login, lock-out, one-time passwords, roles, permissions, and sign-in sessions.
 - `settings.py`: college rules, letter wording, and the app address.
 - `letterdoc.py`: the one path for producing letters (wording plus QR) and their email version.
 - `legal.py`: the privacy policy and terms of use.
-- `assets/favicon.png`: the browser tab icon.
 - `roster.py`: roster import.
 - `hooks.py`: the event bus.
+- `assets/favicon.png`: the browser tab icon.
+- `.streamlit/config.toml`: Streamlit settings (no error details on the page, upload limit, no usage statistics).
 - `features/`: modules that plug in through `INTERFACES.md`:
   - `imports`: timetables and the exam calendar.
   - `letters`: the letter status tracker and notifications.
@@ -93,20 +133,21 @@ Every role starts on **Home**. It shows what needs your attention, such as a let
   - `squad`: make-up tests, squad selection, bulk letters, and attendance risk.
   - `records`: calendar, injuries, taper, semester summary, export, and consent/deletion.
   - `reminders`: WhatsApp/SMS reminders, logging nudges, and the team load report.
+- `testkit.py`: made-up athletes, tournaments and logins that only the tests use. The app never loads it.
 
 ## Tests
     pip install -r requirements-dev.txt
     python3 -m pytest -q
 
-This covers core, auth, roster, settings, the menu, a headless UI check that signs in as each role and opens every page in its menu, and every feature module.
+This covers core, auth (lock-out, one-time passwords, sessions), first-run setup, backup and restore, roster, settings, the menu, a headless UI check that sets up an empty planner and then signs in as each role and opens every page in its menu, and every feature module. The tests build their own databases from `testkit.py`; they never touch `planner.db`.
 
 ## How the numbers work
 - Session load (AU) = minutes × RPE (Foster's session-RPE).
 - ACWR = mean load of the last 7 days ÷ mean load of the last 28 days.
-  > 1.5 high risk · 1.3–1.5 caution · 0.8–1.3 sweet spot · < 0.8 under-trained.
+  Above 1.5 high risk · 1.3 to 1.5 caution · 0.8 to 1.3 sweet spot · below 0.8 under-trained.
 - A clash is any timetable slot or CIE/SEE date that falls inside the tournament window, including travel days.
 - Attendance risk uses the floor, the on-duty rule and the semester dates from Settings.
 
 ## Not built
-- Mess and hostel timing conflicts: waiting for the survey to confirm this pain.
+- Mess and hostel timing conflicts: ruled out by the athlete survey.
 - By design: OCR improvements, nutrition, wearables, and video.

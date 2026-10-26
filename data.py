@@ -1,5 +1,5 @@
 """
-SQLite storage + demo seed data.
+SQLite storage.
 
 Core tables (feature tables live in features/<name>/schema.sql):
 
@@ -11,17 +11,16 @@ Core tables (feature tables live in features/<name>/schema.sql):
   entries     which athletes go to which tournament
   sessions    training log: date, minutes, RPE
   wellness    weekly check-in: sleep, soreness, stress (1-5)
-  meta        key/value settings (demo flag, seed date, college settings)
-  auth_sessions  remember-me login tokens (hashed)
+  meta        key/value settings (college settings, setup code hash)
+  auth_sessions  sign-in tokens (hashed)
+  login_failures failed sign-ins, for the lock-out after repeated wrong passwords
 
 See INTERFACES.md for the contract feature modules code against.
 """
 from __future__ import annotations
 
-import os
-import random
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -53,6 +52,7 @@ CREATE TABLE IF NOT EXISTS wellness (
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS auth_sessions (
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT, expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS login_failures (username TEXT NOT NULL, at TEXT NOT NULL);
 """
 
 # Columns added after the first prototype. Older planner.db files get them on connect.
@@ -60,11 +60,6 @@ _ADDED_COLUMNS = {
     "athletes": {"section": "TEXT DEFAULT ''", "email": "TEXT DEFAULT ''"},
     "tournaments": {"created_by": "INTEGER", "updated_at": "TEXT"},
 }
-
-# (table, column) pairs holding ISO dates; used to roll demo data forward.
-_DATE_COLUMNS = [("events", "date"), ("tournaments", "start_date"), ("tournaments", "end_date"),
-                 ("sessions", "date"), ("wellness", "date")]
-
 
 def _migrate(con):
     for table, cols in _ADDED_COLUMNS.items():
@@ -75,10 +70,20 @@ def _migrate(con):
     con.execute("CREATE UNIQUE INDEX IF NOT EXISTS athletes_usn ON athletes(usn)")
 
 
+def db_path(path=None) -> str:
+    """`path` beats PLANNER_DB (environment or Streamlit secrets) beats planner.db next to app.py."""
+    import config
+    return str(path or config.get("PLANNER_DB") or DB_PATH)
+
+
 def connect(path=None) -> sqlite3.Connection:
-    """Open the database. `path` beats env PLANNER_DB beats planner.db; ":memory:" for tests."""
-    path = path or os.environ.get("PLANNER_DB") or DB_PATH
-    con = sqlite3.connect(str(path), check_same_thread=False)
+    """Open the database (see db_path); ":memory:" for tests. Creates the folder if it is missing."""
+    path = db_path(path)
+    if path != ":memory:":
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path, check_same_thread=False, timeout=15)
+    if path != ":memory:":
+        con.execute("PRAGMA journal_mode=WAL")   # readers don't block the one writer
     con.executescript(SCHEMA)
     _migrate(con)
     import features  # late import: feature modules may import data
@@ -304,158 +309,76 @@ def delete_athlete(con, athlete_id):
     con.commit()
 
 
-# ----------------------------------------------------------------- reset / seed
+# ----------------------------------------------------------------- first run, backup and restore
 
 def is_empty(con) -> bool:
     return con.execute("SELECT COUNT(*) FROM athletes").fetchone()[0] == 0
 
 
-def _wipe(con, keep_settings=False):
+def has_admin(con) -> bool:
+    return con.execute("SELECT 1 FROM users WHERE role='admin' LIMIT 1").fetchone() is not None
+
+
+def has_legacy_sample_data(con) -> bool:
+    """True for a planner.db made by a version before v7, which filled it with made-up records and public logins."""
+    return get_meta(con, "demo") == "1"
+
+
+def wipe(con):
+    """Delete every row in every table, settings included."""
     tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
     for t in tables:
-        if t == "meta" and keep_settings:
-            con.execute("DELETE FROM meta WHERE key NOT LIKE 'setting.%'")
-        else:
-            con.execute(f"DELETE FROM {t}")
+        con.execute(f"DELETE FROM {t}")
     con.commit()
 
 
-def reset(con, today: date | None = None):
-    """Wipe every table (core and feature) and reseed. Unlike deleting the file, this works on Windows."""
-    _wipe(con)
-    seed(con, today)
+def backup_bytes(con) -> bytes:
+    """A consistent copy of the whole database as an SQLite file (taken with SQLite's backup API)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "backup.db"
+        out = sqlite3.connect(str(dest))
+        with out:
+            con.backup(out)
+        out.close()
+        return dest.read_bytes()
 
 
-def start_fresh(con, admin_username: str, admin_password: str, admin_name: str = "Sports Office Admin"):
+REQUIRED_TABLES = {"athletes", "users", "tournaments", "meta"}
+
+
+def restore_bytes(con, raw: bytes) -> dict:
     """
-    Leave demo mode for real use: delete all demo data and demo logins (their passwords are
-    public), keep the college settings, and create one admin with a password the admin chose.
-    Everyone added afterwards must change their first password.
+    Replace everything in the open database with an uploaded backup. The file must be an SQLite
+    database made by this app with at least one admin account. Returns counts of what came back.
     """
-    import auth
-    auth.check_password_strength(admin_password)
-    _wipe(con, keep_settings=True)
-    set_meta(con, "demo", "0")
-    return auth.create_user(con, admin_username, admin_name, "admin", admin_password)
-
-
-def refresh_demo_dates(con, today: date | None = None) -> int:
-    """
-    Demo data is seeded relative to the day it was created. Roll every date
-    forward so the demo still has upcoming tournaments weeks later.
-    Returns days shifted (0 when not a demo DB or already current).
-    """
-    today = today or date.today()
-    if get_meta(con, "demo") != "1":
-        return 0
-    seeded = date.fromisoformat(get_meta(con, "seeded_on", today.isoformat()))
-    shift = (today - seeded).days
-    if shift <= 0:
-        return 0
-    for table, col in _DATE_COLUMNS:
-        con.execute(f"UPDATE {table} SET {col}=date({col}, ?) WHERE {col} IS NOT NULL", (f"+{shift} days",))
-    set_meta(con, "seeded_on", today.isoformat())
-    return shift
-
-
-# Demo logins only exist in demo mode; "Switch to real data" (data.start_fresh) deletes them.
-DEMO_PASSWORD = "planner-demo"
-DEMO_STAFF = [
-    # username, name, role, title, dept, sport
-    ("admin", "Sports Office Admin", "admin", "", None, None),
-    ("ped", "Dr. Prakash (PED)", "coach", "ped", None, None),
-    ("coach.cricket", "Coach Ramesh", "coach", "coach", None, "Cricket"),
-    ("coach.football", "Coach Joseph", "coach", "coach", None, "Football"),
-    ("proctor.cse", "Dr. Meena R", "faculty", "proctor", "CSE", None),
-    ("hod.cse", "Dr. Ramakanth (HoD CSE)", "faculty", "hod", "CSE", None),
-]
-
-
-def seed(con, today: date | None = None):
-    """Ten demo athletes, six weeks of logs, five tournaments, a few clashes, demo logins."""
-    import auth  # late import: auth imports data
-
-    today = today or date.today()
-    rng = random.Random(42)
-
-    people = [
-        ("Aarav Kulkarni", "1RV25CS012", "CSE", "3rd", "Cricket", "Dr. Meena R"),
-        ("Diya Shetty", "1RV25CS034", "CSE", "3rd", "Basketball", "Dr. Meena R"),
-        ("Rohan Hegde", "1RV25EC077", "ECE", "3rd", "Football", "Prof. Anil K"),
-        ("Sneha Patil", "1RV25ME021", "ME", "3rd", "Athletics", "Prof. Ravi S"),
-        ("Karthik Nair", "1RV24CS110", "CSE", "5th", "Cricket", "Dr. Suresh B"),
-        ("Ananya Rao", "1RV25IS045", "ISE", "3rd", "Badminton", "Prof. Latha M"),
-        ("Vikram Gowda", "1RV24CV019", "CV", "5th", "Football", "Prof. Ravi S"),
-        ("Priya Menon", "1RV25CS088", "CSE", "3rd", "Basketball", "Dr. Meena R"),
-        ("Arjun Reddy", "1RV24EE003", "EEE", "5th", "Athletics", "Prof. Anil K"),
-        ("Meghana S", "1RV25CS101", "CSE", "3rd", "Badminton", "Dr. Meena R"),
-    ]
-    for p in people:
-        con.execute("INSERT INTO athletes(name,usn,dept,sem,sport,proctor,phone,section) VALUES (?,?,?,?,?,?,?,?)",
-                    (*p, "98XXXXXXXX", "A"))
-    ids = [r[0] for r in con.execute("SELECT id FROM athletes ORDER BY id")]
-
-    # Weekly timetable: 3rd-sem CSE-ish subjects; two labs a week
-    subjects = ["Data Structures", "Digital Logic & CO", "Operating Systems", "Quantum Computing", "Linear Algebra"]
-    for aid in ids:
-        for wd in range(6):  # Mon-Sat
-            for sub in rng.sample(subjects, 3):
-                con.execute("INSERT INTO timetable(athlete_id,weekday,subject,kind) VALUES (?,?,?,?)", (aid, wd, sub, "class"))
-        con.execute("INSERT INTO timetable(athlete_id,weekday,subject,kind) VALUES (?,?,?,?)", (aid, 1, "Data Structures Lab", "lab"))
-        con.execute("INSERT INTO timetable(athlete_id,weekday,subject,kind) VALUES (?,?,?,?)", (aid, 3, "DLCO Lab", "lab"))
-
-    # CIE dates: CIE-1 in ~2 weeks, CIE-2 in ~6 weeks, SEE in ~10 weeks
-    cie1 = today + timedelta(days=(7 - today.weekday()) % 7 + 14)   # a Monday
-    cie2 = cie1 + timedelta(days=28)
-    see = cie1 + timedelta(days=56)
-    for aid in ids:
-        for i, sub in enumerate(subjects[:3]):
-            con.execute("INSERT INTO events(athlete_id,date,kind,title) VALUES (?,?,?,?)", (aid, (cie1 + timedelta(days=i)).isoformat(), "CIE", f"{sub} CIE-1"))
-            con.execute("INSERT INTO events(athlete_id,date,kind,title) VALUES (?,?,?,?)", (aid, (cie2 + timedelta(days=i)).isoformat(), "CIE", f"{sub} CIE-2"))
-            con.execute("INSERT INTO events(athlete_id,date,kind,title) VALUES (?,?,?,?)", (aid, (see + timedelta(days=i * 2)).isoformat(), "SEE", f"{sub} SEE"))
-
-    # Tournaments: one lands on CIE-1 week, one clean, one during SEE
-    add_tournament(con, "VTU Inter-Collegiate Cricket (Zonal)", "Cricket", "Mysuru",
-                   cie1 - timedelta(days=1), cie1 + timedelta(days=2), 1, 1, [ids[0], ids[4]])
-    add_tournament(con, "Inter-Engineering Basketball Cup", "Basketball", "PES University, Bengaluru",
-                   today + timedelta(days=9), today + timedelta(days=10), 0, 0, [ids[1], ids[7]])
-    add_tournament(con, "AIU South Zone Football", "Football", "Kochi",
-                   see + timedelta(days=1), see + timedelta(days=5), 2, 1, [ids[2], ids[6]])
-    add_tournament(con, "Khelo India University Games - Athletics Trials", "Athletics", "Sree Kanteerava Stadium",
-                   today + timedelta(days=21), today + timedelta(days=22), 0, 0, [ids[3], ids[8]])
-    add_tournament(con, "College Open Badminton", "Badminton", "College Sports Complex",
-                   today + timedelta(days=5), today + timedelta(days=5), 0, 0, [ids[5], ids[9]])
-
-    # Six weeks of training logs. Athlete 0 spikes in the last week (ACWR > 1.5).
-    for k, aid in enumerate(ids):
-        base = rng.choice([60, 75, 90])
-        for back in range(42, -1, -1):
-            d = today - timedelta(days=back)
-            if d.weekday() == 6 and rng.random() < 0.7:
-                continue  # most Sundays off
-            minutes = base + rng.randint(-15, 15)
-            rpe = rng.randint(4, 7)
-            if k == 0 and back <= 6:          # pre-tournament overload
-                minutes, rpe = base + 60, rng.randint(8, 10)
-            if k == 3 and 14 <= back <= 24:   # injury layoff then return
-                continue
-            con.execute("INSERT INTO sessions(athlete_id,date,minutes,rpe,type) VALUES (?,?,?,?,?)",
-                        (aid, d.isoformat(), minutes, rpe, rng.choice(["Skills", "Conditioning", "Match practice"])))
-        # Weekly wellness for 6 weeks
-        for w in range(6, -1, -1):
-            d = today - timedelta(days=7 * w)
-            sleep = rng.randint(2, 5)
-            soreness = rng.randint(1, 4) + (1 if (k == 0 and w == 0) else 0)
-            stress = rng.randint(1, 4) + (1 if w <= 1 else 0)
-            con.execute("INSERT INTO wellness(athlete_id,date,sleep,soreness,stress) VALUES (?,?,?,?,?)",
-                        (aid, d.isoformat(), sleep, min(soreness, 5), min(stress, 5)))
-
-    # Logins. Demo athletes use their USN as the password.
-    for aid, p in zip(ids, people):
-        auth.create_user(con, p[1], p[0], "athlete", p[1], athlete_id=aid, dept=p[2], sem=p[3], section="A", sport=p[4])
-    for username, name, role, title, dept, sport in DEMO_STAFF:
-        auth.create_user(con, username, name, role, DEMO_PASSWORD, title=title, dept=dept, sport=sport)
-
-    set_meta(con, "demo", "1")
-    set_meta(con, "seeded_on", today.isoformat())
+    import tempfile
+    if not raw.startswith(b"SQLite format 3\x00"):
+        raise ValueError("That file isn't a planner backup (it isn't an SQLite database).")
+    with tempfile.TemporaryDirectory() as tmp:
+        src_path = Path(tmp) / "restore.db"
+        src_path.write_bytes(raw)
+        src = sqlite3.connect(str(src_path))
+        try:
+            tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            missing = REQUIRED_TABLES - tables
+            if missing:
+                raise ValueError("That file isn't a planner backup (missing " + ", ".join(sorted(missing)) + ").")
+            if not src.execute("SELECT 1 FROM users WHERE role='admin' LIMIT 1").fetchone():
+                raise ValueError("That backup has no admin account, so nobody could sign in to it.")
+            if src.execute("SELECT value FROM meta WHERE key='demo'").fetchone() == ("1",):
+                raise ValueError("That backup holds the sample records and public logins of an older version.")
+            src.backup(con)
+        except sqlite3.DatabaseError as err:
+            raise ValueError(f"That backup couldn't be read: {err}.") from err
+        finally:
+            src.close()
+    # Bring the restored copy up to this version's schema.
+    con.executescript(SCHEMA)
+    _migrate(con)
+    import features
+    features.apply_schemas(con)
+    con.execute("DELETE FROM auth_sessions")   # everyone signs in again
     con.commit()
+    return {"athletes": con.execute("SELECT COUNT(*) FROM athletes").fetchone()[0],
+            "users": con.execute("SELECT COUNT(*) FROM users").fetchone()[0]}

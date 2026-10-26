@@ -11,14 +11,15 @@ import pytest
 import core
 import data
 from features.imports import logic, parsers
+import testkit
 
-SAMPLES = Path(__file__).parent / "samples"
+SAMPLES = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
 def con():
     c = data.connect(":memory:")
-    data.seed(c, today=date(2026, 9, 28))
+    testkit.seed(c, today=date(2026, 9, 28))
     return c
 
 

@@ -8,6 +8,7 @@ import pytest
 import data
 import hooks
 from features.letters import logic
+import testkit
 
 SCHEMA = Path(__file__).with_name("schema.sql").read_text()
 
@@ -16,7 +17,7 @@ SCHEMA = Path(__file__).with_name("schema.sql").read_text()
 def con():
     c = data.connect(":memory:")
     c.executescript(SCHEMA)          # core also runs this on connect; IF NOT EXISTS makes it harmless
-    data.seed(c, today=date(2026, 9, 28))
+    testkit.seed(c, today=date(2026, 9, 28))
     hooks.clear()
     c.execute("DELETE FROM letters_notifications")   # seeding may have sent "you were entered" notices
     c.commit()

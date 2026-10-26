@@ -1,14 +1,24 @@
 """
-Dual-Career Planner for College Athletes - Streamlit prototype.
+Dual-Career Planner for College Athletes.
 Run:  streamlit run app.py
 
 Everyone signs in. Athletes use their USN; staff use their username. What
 each person sees depends on their role (see auth.py). Feature modules under
 features/ add their own tabs and public pages (see INTERFACES.md).
+
+A new database starts empty: the first visit asks for the setup code and
+creates the first admin (firstrun.py). Deployment settings come from the
+environment or Streamlit secrets (config.py).
 """
+import config
+
+config.load_secrets_into_env()   # before settings.py reads PLANNER_BASE_URL
+
+import logging
 import os
+import uuid
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -18,11 +28,19 @@ import auth
 import core
 import data
 import features
+import firstrun
 import legal
 import letterdoc
 import nav
 import roster
 import settings
+
+log = logging.getLogger("planner")
+if not log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    log.addHandler(_h)
+    log.setLevel(logging.INFO)
 
 FAVICON = str(Path(__file__).with_name("assets") / "favicon.png")
 st.set_page_config(page_title="Dual-Career Planner", page_icon=FAVICON, layout="wide")
@@ -32,6 +50,7 @@ st.set_page_config(page_title="Dual-Career Planner", page_icon=FAVICON, layout="
 st.html("""<style>
 #MainMenu, footer, [data-testid="stAppDeployButton"], [data-testid="stDecoration"],
 [data-testid="stMainMenu"] { display: none !important; }
+.st-key-cookie_js { display: none !important; }
 [data-testid="stMetricDelta"] { border-radius: 0.25rem !important; }
 @media (max-width: 640px) {
   [data-testid="stMetricValue"] { font-size: 1.4rem; }
@@ -44,9 +63,6 @@ st.html("""<style>
 </style>""")
 
 con = data.connect()
-if data.is_empty(con):
-    data.seed(con)
-data.refresh_demo_dates(con)
 today = date.today()
 # The verification feature builds QR links from PLANNER_BASE_URL; point it at the resolved address.
 os.environ["PLANNER_BASE_URL"] = settings.base_url(con)
@@ -63,6 +79,102 @@ def open_doc(doc):
 if st.query_params.get(legal.PARAM) in legal.DOCS:
     st.button("Back", icon=":material/arrow_back:", on_click=close_doc)
     legal.render(con, st.query_params[legal.PARAM])
+    st.stop()
+
+def write_cookie():
+    """Store or clear the sign-in cookie in this browser when one is due (see auth.py)."""
+    script = auth.cookie_script()
+    if script:
+        with st.container(key="cookie_js"):
+            st.html(script, unsafe_allow_javascript=True)
+
+
+def legacy_page():
+    st.title("This database holds sample records")
+    st.write("It was made by an earlier version of the planner, which filled new databases with made-up athletes "
+             "and accounts whose passwords were public. It can't be used as it is.")
+    st.write("If you never put real records in it, clear it below and set the planner up. If you did, stop here: "
+             "download a copy first, then ask whoever looks after the server.")
+    st.download_button("Download a copy of this database", data.backup_bytes(con), "planner-before-v7.db",
+                       "application/vnd.sqlite3", on_click="ignore")
+    with st.form("legacy"):
+        confirm = st.text_input('Type "CLEAR" to delete everything in it')
+        if st.form_submit_button("Clear the database", type="primary"):
+            if confirm.strip() != "CLEAR":
+                st.error('Type CLEAR in capitals to confirm.')
+            else:
+                data.wipe(con)
+                log.info("Cleared a database with sample records from an earlier version")
+                st.rerun()
+
+
+def setup_page():
+    firstrun.prepare(con)
+    st.title("Set up the planner")
+    col, _ = st.columns([3, 2])
+    with col:
+        st.write("There is no admin account yet. Create the first one here. It is the account that adds staff, "
+                 "imports the roster and changes the college rules.")
+        where = ("the `PLANNER_SETUP_CODE` secret you set for this app" if firstrun.code_from_secret() else
+                 "in the server log, on the line that starts with **Planner setup code**. On Streamlit Cloud open "
+                 "**Manage app** at the bottom right of the app to see the log. A new code is written each time the "
+                 "app restarts.")
+        st.caption("To make sure the right person does this, you need the setup code. It is " + where)
+        new, restore = st.tabs(["Create the first admin", "Restore a backup"])
+        with new:
+            with st.form("setup"):
+                code = st.text_input("Setup code", type="password")
+                college = st.text_input("College name", placeholder=settings.DEFAULTS["college_name"],
+                                        help="Used on letters and the privacy policy. You can change it later in Settings.")
+                c1, c2 = st.columns(2)
+                uname = c1.text_input("Admin username", placeholder="sports.office")
+                name = c2.text_input("Full name")
+                p1 = c1.text_input(f"Password ({auth.ADMIN_MIN_LENGTH}+ characters)", type="password")
+                p2 = c2.text_input("Repeat the password", type="password")
+                st.caption("A few unrelated words make a strong password that is easy to type. Keep it somewhere safe: "
+                           "if every admin password is lost, the only way back in is setting up again on a new database.")
+                if st.form_submit_button("Create admin account", type="primary"):
+                    try:
+                        uid = firstrun.create_first_admin(con, code, uname, name, p1, p2, college)
+                    except ValueError as err:
+                        st.error(str(err))
+                    else:
+                        auth.login_session(auth.get_user(con, uid), con)
+                        st.rerun()
+        with restore:
+            st.write("Starting again after the server lost its data? Upload the latest backup (Settings, Backup and "
+                     "restore). Everyone signs in with the accounts in that backup.")
+            with st.form("setup_restore"):
+                code = st.text_input("Setup code", type="password", key="restore_code")
+                up = st.file_uploader("Backup file (.db)", type=["db", "sqlite", "sqlite3"])
+                if st.form_submit_button("Restore", type="primary"):
+                    if up is None:
+                        st.error("Choose the backup file first.")
+                    else:
+                        try:
+                            res = firstrun.restore_backup(con, code, up.getvalue())
+                        except ValueError as err:
+                            st.error(str(err))
+                        else:
+                            log.info("Restored a backup at setup: %s", res)
+                            st.success(f"Restored {res['athletes']} athletes and {res['users']} accounts. Sign in.")
+                            st.rerun()
+        a, b = st.columns(2)
+        a.button("Privacy policy", on_click=open_doc, args=("privacy",), type="tertiary")
+        b.button("Terms of use", on_click=open_doc, args=("terms",), type="tertiary")
+
+
+_retired = auth.retire_username_passwords(con)
+if _retired:
+    log.warning("%d accounts still used their USN or username as password and were given a random one; an admin "
+                "can reset them on the Users page: %s", len(_retired), ", ".join(_retired))
+
+if data.has_legacy_sample_data(con):
+    legacy_page()
+    st.stop()
+if not data.has_admin(con):
+    write_cookie()
+    setup_page()
     st.stop()
 
 route = features.public_route(st.query_params)
@@ -83,23 +195,19 @@ def login_page():
         "training load.")
     with col:
         auth.login_form()
+        st.caption("First sign-in: use the one-time password from the sports office, then choose your own. "
+                   "Forgot your password? Ask the sports office admin to reset it.")
         a, b = st.columns(2)
         a.button("Privacy policy", on_click=open_doc, args=("privacy",), type="tertiary")
         b.button("Terms of use", on_click=open_doc, args=("terms",), type="tertiary")
-    if data.get_meta(con, "demo") == "1":
-        with col.expander("Demo accounts"):
-            st.markdown(
-                "Demo mode: these accounts disappear when an admin switches to real data (Settings tab).\n\n"
-                "- **Athlete**: USN `1RV25CS012`, password `1RV25CS012` (any demo athlete: password = USN)\n"
-                f"- **Staff** (password `{data.DEMO_PASSWORD}` for all): `coach.cricket`, `ped` "
-                "(Physical Education Director), `proctor.cse`, `hod.cse`, `admin`")
 
 
 def change_password_page(user):
     st.title("Set a new password")
-    st.info("This is your first sign-in. Please choose your own password.")
+    st.info("You signed in with a one-time password. Choose your own to continue.")
+    n = auth.ADMIN_MIN_LENGTH if user.role == "admin" else auth.MIN_LENGTH
     with st.form("pw"):
-        p1 = st.text_input("New password", type="password")
+        p1 = st.text_input(f"New password ({n}+ characters)", type="password")
         p2 = st.text_input("Repeat it", type="password")
         if st.form_submit_button("Save", type="primary"):
             if p1 != p2:
@@ -107,13 +215,16 @@ def change_password_page(user):
             else:
                 try:
                     auth.set_password(con, user.id, p1)
+                    auth.end_all_sessions(con, user.id, keep_token=st.session_state.get("session_token"))
                     st.session_state["user"] = auth.get_user(con, user.id)
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
+    st.button("Sign out", on_click=auth.logout_session, args=(con,), type="tertiary")
 
 
 user = auth.restore_session(con)
+write_cookie()
 if user is not None:
     user = auth.get_user(con, user.id)  # pick up role/scope changes; None if the account was deleted
     if user is None:
@@ -138,9 +249,10 @@ def run_feature_tab(label, render):
     except Exception as err:  # noqa: BLE001
         if isinstance(err, (StopException, RerunException)):
             raise
-        st.error(f"The {label} tab hit an error and couldn't load: {err}")
-        if auth.can(user, "manage_users"):
-            st.exception(err)
+        ref = uuid.uuid4().hex[:8]
+        log.exception("Page part %r failed for %s (ref %s)", label, user.username, ref)
+        st.error(f"The {label} part of this page couldn't load. Try again in a moment; if it keeps happening, tell "
+                 f"the sports office admin and quote reference {ref}.")
 
 
 def feature_call(feature, module, fn, *args, **kwargs):
@@ -453,9 +565,12 @@ def part_add_test(athlete):
     with st.form("event"):
         d3 = st.date_input("Date", today + timedelta(days=7), key="ed")
         kind = st.selectbox("Type", ["CIE", "SEE", "lab"])
-        title = st.text_input("Title", "Data Structures CIE-3")
+        title = st.text_input("Title", placeholder="Data Structures CIE-3")
         if st.form_submit_button("Save date", type="primary"):
-            data.add_event(con, aid, d3, kind, title)
+            if not title.strip():
+                st.error("Give the test a title, for example the subject and which CIE it is.")
+                st.stop()
+            data.add_event(con, aid, d3, kind, title.strip())
             st.toast("Saved.")
             st.rerun()
     ev = data.events(con, aid)
@@ -584,14 +699,15 @@ def render_tournaments(ids):
 
     st.markdown("#### Add a tournament")
     with st.form("tourn"):
-        name = st.text_input("Name", "VTU Inter-Collegiate Badminton")
+        name = st.text_input("Name", placeholder="Inter-Collegiate Badminton")
         if user.role == "coach" and user.sport:
             sport = user.sport
             st.text_input("Sport", sport, disabled=True)
         else:
-            sports = sorted(set(athletes["sport"].dropna())) or ["Cricket"]
-            sport = st.selectbox("Sport", sports)
-        venue = st.text_input("Venue", "Bengaluru")
+            sports = sorted(set(athletes["sport"].dropna()))
+            sport = (st.selectbox("Sport", sports) if sports
+                     else st.text_input("Sport", help="Import the roster first to pick from your athletes' sports."))
+        venue = st.text_input("Venue")
         c1, c2 = st.columns(2)
         s = c1.date_input("Start", today + timedelta(days=14)); e = c2.date_input("End", today + timedelta(days=15))
         c3, c4 = st.columns(2)
@@ -599,6 +715,8 @@ def render_tournaments(ids):
         who = st.multiselect("Athletes", list(names), format_func=names.get)
         if st.form_submit_button("Save tournament"):
             try:
+                if not name.strip() or not (sport or "").strip():
+                    raise ValueError("Give the tournament a name and a sport.")
                 data.add_tournament(con, name, sport, venue, s, e, int(tb), int(ta), who, created_by=user.id)
                 st.success("Saved. Entered athletes see the clashes on their next sign-in.")
                 st.rerun()
@@ -609,15 +727,35 @@ def render_tournaments(ids):
 def render_roster_import():
     st.caption("Upload the sports department spreadsheet (.csv or .xlsx). Column names are matched loosely "
                "(USN / Reg No, Name, Department / Branch, Semester, Section, Sport / Game, Proctor, Phone, Email). "
-               "Existing athletes are updated by USN; new ones get a login with their USN as the first password.")
-    st.download_button("Download a template", roster.TEMPLATE_CSV, file_name="roster_template.csv", mime="text/csv")
+               "Existing athletes are updated by USN. New athletes get a login with their USN as the username and a "
+               "one-time password, shown once after the import for you to hand out.")
+    creds = st.session_state.get("roster_credentials")
+    if creds:
+        with st.container(border=True):
+            st.markdown(f"**One-time passwords for {len(creds)} new athlete{'s' if len(creds) > 1 else ''}**")
+            st.caption("Download this list now and give each athlete their own password privately. It is not shown "
+                       "again; the admin can reset a password on the Users page if one is lost. Athletes choose their "
+                       "own password at first sign-in.")
+            st.download_button("Download one-time passwords (.csv)", roster.credentials_csv(creds),
+                               file_name=f"one-time-passwords-{today}.csv", mime="text/csv", type="primary",
+                               icon=":material/download:", on_click="ignore")
+            st.dataframe(pd.DataFrame(creds).rename(columns={"usn": "USN", "name": "Name", "password": "One-time password"}),
+                         hide_index=True, width="stretch")
+            if st.button("I've saved them, hide this list"):
+                del st.session_state["roster_credentials"]
+                st.rerun()
+    if st.session_state.get("roster_result"):
+        st.success(st.session_state.pop("roster_result"))
+    st.download_button("Download a blank template", roster.TEMPLATE_CSV, file_name="roster_template.csv",
+                       mime="text/csv", on_click="ignore")
     up = st.file_uploader("Roster file", type=["csv", "xlsx"])
     if not up:
         return
     try:
         df = roster.parse(up)
-    except Exception as err:  # noqa: BLE001 - show any parse failure to the user
-        st.error(f"Couldn't read that file: {err}")
+    except Exception:  # noqa: BLE001 - any parse failure is the file's, not the app's
+        log.info("Roster file %r couldn't be read", up.name, exc_info=True)
+        st.error("Couldn't read that file. Save it as .csv or .xlsx with one header row and try again.")
         return
     rows, problems = roster.validate(df)
     st.write(f"**{len(rows)}** athletes ready to import, **{len(problems)}** rows need attention.")
@@ -634,15 +772,38 @@ def render_roster_import():
         st.dataframe(preview, hide_index=True, width="stretch")
         if st.button(f"Import {len(rows)} athletes", type="primary"):
             res = roster.apply(con, rows)
-            st.success(f"Imported: {res['created']} new, {res['updated']} updated, {res['accounts']} logins created.")
+            log.info("Roster import by %s: %s new, %s updated", user.username, res["created"], res["updated"])
+            if res["credentials"]:
+                st.session_state["roster_credentials"] = res["credentials"]
+            st.session_state["roster_result"] = (f"Imported: {res['created']} new, {res['updated']} updated, "
+                                                 f"{res['accounts']} logins created.")
+            st.rerun()
+
+
+def show_new_password(key):
+    """A one-time password made on this page, shown until the admin hides it."""
+    shown = st.session_state.get(key)
+    if shown:
+        who, pw = shown
+        with st.container(border=True):
+            st.markdown(f"One-time password for **{who}**:")
+            st.code(pw, language=None)
+            st.caption("Give it to them privately. It is not shown again, and they choose their own password when "
+                       "they first sign in with it.")
+            if st.button("Done, hide it", key=f"{key}_hide"):
+                del st.session_state[key]
+                st.rerun()
 
 
 def render_users():
-    st.dataframe(auth.users(con), hide_index=True, width="stretch")
+    st.dataframe(auth.users(con).rename(columns={"must_change_password": "one-time password not yet changed"}),
+                 hide_index=True, width="stretch")
     st.markdown("#### Add a staff account")
+    st.caption("Athlete accounts are made by Roster import. Staff accounts get a one-time password, shown here once.")
+    show_new_password("new_user_pw")
     with st.form("add_user"):
         c1, c2 = st.columns(2)
-        username = c1.text_input("Username")
+        username = c1.text_input("Username", placeholder="coach.cricket")
         name = c2.text_input("Full name")
         role = c1.selectbox("Role", ["coach", "faculty", "admin"])
         title = c2.selectbox("Title", ["", "coach", "ped", "teacher", "proctor", "hod"],
@@ -651,19 +812,21 @@ def render_users():
         dept = c2.text_input("Department (faculty)")
         sem = c1.text_input("Semester (faculty, optional)", placeholder="3rd")
         section = c2.text_input("Section (faculty, optional)")
-        pw = st.text_input("First password (8+ characters)", type="password", help="They will be asked to change it.")
         if st.form_submit_button("Create account"):
-            try:
-                if not username:
-                    raise ValueError("Username is required.")
-                auth.check_password_strength(pw, username)
-                auth.create_user(con, username, name or username, role, pw, title=title, dept=dept or None,
+            uname = username.strip().lower()
+            if not uname or " " in uname:
+                st.error("Choose a username without spaces, for example coach.cricket.")
+            elif auth.user_by_username(con, uname):
+                st.error(f"The username {uname} is taken.")
+            else:
+                pw = auth.temporary_password()
+                auth.create_user(con, uname, name.strip() or uname, role, pw, title=title, dept=dept or None,
                                  sem=sem or None, section=section or None, sport=sport or None, must_change_password=True)
-                st.success(f"Created {username}.")
+                log.info("%s created the %s account %s", user.username, role, uname)
+                st.session_state["new_user_pw"] = (uname, pw)
                 st.rerun()
-            except Exception as err:  # noqa: BLE001 - e.g. duplicate username
-                st.error(str(err))
     st.markdown("#### Change or remove an account")
+    show_new_password("reset_pw")
     all_users = auth.users(con)
     opts = dict(zip(all_users["id"].astype(int), all_users["username"] + " (" + all_users["role"] + ")"))
     uid = st.selectbox("Account", list(opts), format_func=opts.get)
@@ -676,23 +839,57 @@ def render_users():
         dept = c2.text_input("Department", u.dept or "")
         sem = c1.text_input("Semester", u.sem or "")
         section = c2.text_input("Section", u.section or "")
-        newpw = st.text_input("Reset password to (optional)", type="password")
-        a, b = st.columns(2)
+        a, b, c = st.columns(3)
         save = a.form_submit_button("Save")
-        delete = b.form_submit_button("Delete account", disabled=(u.id == user.id))
-        if save:
-            try:
+        reset = b.form_submit_button("Reset password", disabled=(u.id == user.id),
+                                     help="Makes a new one-time password and signs them out everywhere.")
+        delete = c.form_submit_button("Delete account", disabled=(u.id == user.id))
+        try:
+            if save:
                 auth.update_user(con, uid, role=role, title=title, sport=sport, dept=dept, sem=sem, section=section)
-                if newpw:
-                    auth.set_password(con, uid, newpw)
-                    con.execute("UPDATE users SET must_change_password=1 WHERE id=?", (uid,)); con.commit()
                 st.success("Saved.")
                 st.rerun()
-            except ValueError as err:
-                st.error(str(err))
-        if delete:
-            auth.delete_user(con, uid)
-            st.rerun()
+            if reset:
+                st.session_state["reset_pw"] = (u.username, auth.reset_password(con, uid))
+                log.info("%s reset the password of %s", user.username, u.username)
+                st.rerun()
+            if delete:
+                auth.delete_user(con, uid)
+                log.info("%s deleted the account %s", user.username, u.username)
+                st.rerun()
+        except ValueError as err:
+            st.error(str(err))
+
+
+def render_backup():
+    st.subheader("Backup and restore")
+    last = data.get_meta(con, "last_backup_at")
+    st.caption("A backup is the whole database in one file: athletes, accounts, letters, logs and these settings. "
+               "Keep it somewhere private, because it holds personal and health data. On Streamlit Cloud the "
+               "database is lost whenever the app restarts or is redeployed, so download a backup at least once a "
+               "week and after big changes. "
+               + (f"Last backup downloaded: {last[:16].replace('T', ' ')}." if last else "No backup downloaded yet."))
+    st.download_button("Download a backup", data.backup_bytes(con), icon=":material/download:",
+                       file_name=f"planner-backup-{today}.db", mime="application/vnd.sqlite3",
+                       on_click=lambda: data.set_meta(con, "last_backup_at", datetime.now().isoformat(timespec="seconds")))
+    with st.expander("Restore from a backup"):
+        st.warning("Restoring replaces everything in the planner with the backup, including accounts and settings. "
+                   "Anything added since that backup is lost, and everyone has to sign in again.")
+        with st.form("restore"):
+            up = st.file_uploader("Backup file (.db)", type=["db", "sqlite", "sqlite3"])
+            confirm = st.text_input('Type "RESTORE" to confirm')
+            if st.form_submit_button("Restore", type="primary"):
+                if up is None or confirm.strip() != "RESTORE":
+                    st.error('Choose the backup file and type RESTORE in capitals.')
+                else:
+                    try:
+                        res = data.restore_bytes(con, up.getvalue())
+                    except ValueError as err:
+                        st.error(str(err))
+                    else:
+                        log.info("%s restored a backup: %s", user.username, res)
+                        auth.logout_session(con)
+                        st.rerun()
 
 
 def render_settings():
@@ -755,20 +952,22 @@ def render_settings():
             for k in vals:
                 settings.set(con, k, settings.DEFAULTS[k])
             st.rerun()
-    sample = data.athletes(con)
+    first = data.athletes(con)
     tours = data.all_tournaments(con)
-    if not sample.empty and not tours.empty:
-        a = sample.iloc[0].to_dict()
+    if not first.empty and not tours.empty:
+        a = first.iloc[0].to_dict()
         t = tours.iloc[0].to_dict()
-        st.download_button("Download a sample letter", letterdoc.make_letter(con, a, t), file_name="sample_letter.docx",
-                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        st.download_button("Preview the letter", letterdoc.make_letter(con, a, t), file_name="letter_preview.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           on_click="ignore", help=f"Uses {a['name']} and {t['name']} to show the wording.")
 
     st.subheader("App address for QR codes")
     detected_ip = settings.lan_ip()
     st.write(f"QR codes on letters currently open **{settings.base_url(con)}**.")
-    st.caption("Leave blank to detect it automatically. For a demo on a laptop, phones must be on the same Wi-Fi, and "
-               f"this machine's address is {'`http://' + detected_ip + ':' + str(settings._port()) + '`' if detected_ip else 'not detected'}. "
-               "If the app is deployed (e.g. Streamlit Cloud), enter its https address.")
+    st.caption("When deployed (for example on Streamlit Cloud), enter its https address here or set the "
+               "PLANNER_BASE_URL secret. Left blank, the address people used to open the app is detected. On a laptop "
+               "on the college network, phones must be on the same Wi-Fi; this machine's address is "
+               f"{'`http://' + detected_ip + ':' + str(settings._port()) + '`' if detected_ip else 'not detected'}.")
     with st.form("baseurl"):
         url = st.text_input(settings.LABELS["base_url"], cur["base_url"], placeholder="http://192.168.1.20:8501")
         if st.form_submit_button("Save address"):
@@ -787,29 +986,8 @@ def render_settings():
     except ImportError:
         pass
 
-    if data.get_meta(con, "demo") == "1":
-        st.divider()
-        st.subheader("Switch to real data")
-        st.warning("This deletes every demo athlete, tournament, letter and demo login (their passwords are public), "
-                   "keeps the rules and wording above, and creates one admin account with a password you choose. "
-                   "Then import the real roster. Everyone else must set their own password on first sign-in. "
-                   "This cannot be undone.")
-        with st.form("fresh"):
-            c1, c2 = st.columns(2)
-            uname = c1.text_input("New admin username", "sports.office")
-            pw = c2.text_input("New admin password (8+ characters)", type="password")
-            confirm = st.text_input('Type "DELETE DEMO DATA" to confirm')
-            if st.form_submit_button("Switch to real data", type="primary"):
-                if confirm.strip() != "DELETE DEMO DATA":
-                    st.error("Type the confirmation text exactly.")
-                else:
-                    try:
-                        auth.logout_session(con)
-                        data.start_fresh(con, uname, pw)
-                        st.success("Done. Sign in with the new admin account.")
-                        st.rerun()
-                    except ValueError as err:
-                        st.error(str(err))
+    st.divider()
+    render_backup()
 
 
 def render_class_view(ids):
@@ -900,9 +1078,9 @@ def staff_attention():
         if dels:
             items.append(("red", f"{len(dels)} data deletion request{'s' if len(dels) > 1 else ''} to carry out.",
                           "privacy"))
-        if data.get_meta(con, "demo") == "1":
-            items.append(("blue", "The app is in demo mode. Switch to real data in Settings before a pilot.",
-                          "settings"))
+        last = data.get_meta(con, "last_backup_at")
+        if not data.is_empty(con) and (not last or datetime.fromisoformat(last) < datetime.now() - timedelta(days=7)):
+            items.append(("amber", "No backup downloaded in the last 7 days. Download one in Settings.", "settings"))
     order = {"red": 0, "amber": 1, "blue": 2}
     return sorted(items, key=lambda i: order[i[0]])
 
@@ -928,8 +1106,8 @@ def part_staff_home():
         ]
     elif auth.can(user, "manage_users"):
         steps = [
-            (data.get_meta(con, "demo") != "1", "Set the college rules and letter wording, then switch to real data.",
-             "settings"),
+            (data.get_meta(con, "setting.college_name") is not None,
+             "Set the college name, attendance rules and letter wording.", "settings"),
             (len(auth.users(con)) > 1, "Add staff accounts for coaches and faculty.", "users"),
             (bool(ids), "Import the athlete roster.", "roster"),
             (not data.all_tournaments(con).empty, "Add tournaments and pick squads.", "tournaments"),
@@ -986,8 +1164,8 @@ ids = auth.visible_athlete_ids(con, user)
 # Daily reminders run on the first page load of the day (the feature dedupes; a failure never blocks the page).
 try:
     feature_call("reminders", "logic", "run_if_due", con)
-except Exception as err:  # noqa: BLE001
-    features.load_errors["reminders (daily run)"] = repr(err)
+except Exception:  # noqa: BLE001
+    log.exception("Daily reminders run failed")
 
 
 def consent_gate():
@@ -1082,8 +1260,6 @@ ROLE_LABEL = {"athlete": "Athlete", "coach": "Coach", "faculty": "Faculty", "adm
 st.html(nav.CSS)
 st.logo(FAVICON)
 st.sidebar.markdown("### Dual-Career Planner")
-if data.get_meta(con, "demo") == "1":
-    st.sidebar.caption("Demo mode: every athlete, tournament and number here is made up.")
 role_label = "Physical Education Director" if user.is_ped else ROLE_LABEL[user.role]
 if user.role == "coach" and user.sport:
     role_label += f" · {user.sport}"
@@ -1098,26 +1274,28 @@ if isinstance(badge, str) and badge:
 nav_slot = st.sidebar.container()
 st.sidebar.divider()
 with st.sidebar.expander("Account"):
-    with st.form("chpw"):
+    with st.form("chpw", clear_on_submit=True):
+        p0 = st.text_input("Current password", type="password")
         p1 = st.text_input("New password", type="password")
         if st.form_submit_button("Change password"):
             try:
+                if auth.authenticate(con, user.username, p0) is None:
+                    raise ValueError("Your current password isn't right.")
                 auth.set_password(con, user.id, p1)
-                st.success("Password updated.")
-            except ValueError as e:
+                auth.end_all_sessions(con, user.id, keep_token=st.session_state.get("session_token"))
+                st.success("Password updated. You were signed out on your other devices.")
+            except (ValueError, auth.AccountLocked) as e:
                 st.error(str(e))
-    if auth.can(user, "manage_users") and data.get_meta(con, "demo") == "1":
-        if st.button("Reset demo data", help="Puts every demo account and record back to how it started."):
-            auth.logout_session(con)
-            data.reset(con)
-            st.rerun()
+    if st.button("Sign out on every device"):
+        auth.end_all_sessions(con, user.id)
+        auth.logout_session(con)
+        st.rerun()
 if st.sidebar.button("Sign out", icon=":material/logout:"):
     auth.logout_session(con)
     st.rerun()
 if features.load_errors and auth.can(user, "manage_users"):
-    with st.sidebar.expander("Feature load errors", icon=":material/warning:"):
-        for name, err in features.load_errors.items():
-            st.code(f"{name}\n{err}")
+    st.sidebar.warning("Part of the planner didn't load (" + ", ".join(features.load_errors)
+                       + "). Its pages are hidden. The details are in the server log.", icon=":material/warning:")
 
 # ----------------------------------------------------------------- the page
 if user.role == "athlete":

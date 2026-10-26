@@ -20,7 +20,9 @@ and what you can do about it.
 - **Training and wellbeing:** the training sessions you log (minutes and how hard they felt), weekly wellness \
 check-ins (sleep, soreness, stress) and any injuries you or your coach record. This is health-related \
 information, so it is kept away from faculty.
-- **Sign-in:** your username and a scrambled (hashed) password.
+- **Sign-in:** your username, a scrambled (hashed) password, and one cookie that keeps you signed in on your \
+device until you sign out or it expires (12 hours, or 30 days if you choose). The planner sets \
+no tracking or advertising cookies.
 
 #### Why
 To find clashes between tournaments and classes or tests early, prepare the leave letter to the Dean of Student \
@@ -38,7 +40,8 @@ Nobody else is given access. The planner shows no adverts, sells no data and doe
 services.
 
 #### Where it is stored
-In a single database on the server the college runs the planner on. Letters you download are saved on your own \
+In a single database on the server the college runs the planner on. The sports office admin downloads backup \
+copies of it and keeps them privately, so records can be restored if the server loses them. Letters you download are saved on your own \
 device. Messages (SMS or WhatsApp reminders) are only sent if the college turns them on and you agree to them, and \
 then only your phone number and the message text go to the messaging service.
 
@@ -71,15 +74,12 @@ in the planner records it; it does not replace their signature.
 physio or doctor, especially after an injury.
 
 #### Your account
-Keep your password to yourself and change the first one you are given. Only enter information that is true and \
+Keep your password to yourself. The one-time password you are given has to be changed the first time you sign \
+in. After several wrong passwords in a row an account is locked for 15 minutes. Only enter information that is true and \
 that you are allowed to share. Do not upload other people's data without their permission.
 
-#### Demo mode
-While the planner is in demo mode, every athlete, tournament and number in it is made up for trying the app out. \
-Demo accounts have public passwords and are removed when the admin switches to real data.
-
 #### Availability and changes
-The planner is a student project run by the college. It may be unavailable at times, and its features and these \
+The planner is run by the college's sports office. It may be unavailable at times, and its features and these \
 terms may change. Significant changes to what data is kept will be shown to athletes before they continue.
 """
 

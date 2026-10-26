@@ -10,6 +10,7 @@ import features
 import hooks
 from features.letters import logic as letters
 from features.verification import logic
+import testkit
 
 TODAY = date(2026, 9, 28)
 
@@ -17,7 +18,7 @@ TODAY = date(2026, 9, 28)
 @pytest.fixture
 def con():
     c = data.connect(":memory:")
-    data.seed(c, today=TODAY)
+    testkit.seed(c, today=TODAY)
     yield c
     c.close()
 
@@ -64,7 +65,7 @@ def test_token_from_another_database_fails(con):
     tid, aid = cricket(con)
     tok = logic.make_token(con, aid, tid)
     other = data.connect(":memory:")
-    data.seed(other, today=TODAY)
+    testkit.seed(other, today=TODAY)
     assert logic.parse_token(other, tok) is None
 
 

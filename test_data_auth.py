@@ -7,6 +7,7 @@ import auth
 import core
 import data
 import hooks
+import testkit
 
 TODAY = date(2026, 9, 28)
 
@@ -14,7 +15,7 @@ TODAY = date(2026, 9, 28)
 @pytest.fixture
 def con():
     c = data.connect(":memory:")
-    data.seed(c, TODAY)
+    testkit.seed(c, TODAY)
     yield c
     c.close()
 
@@ -86,31 +87,56 @@ def test_add_events_bulk_skips_duplicates(con):
     assert data.add_events_bulk(con, [aid], item) == 0
 
 
-# ----------------------------------------------------------------- reset / demo dates
+# ----------------------------------------------------------------- first run, backup, restore
 
-def test_reset_reseeds_without_deleting_file(tmp_path):
-    path = tmp_path / "p.db"
-    c = data.connect(path)
-    data.seed(c, TODAY)
-    data.add_tournament(c, "Extra", "Cricket", "V", TODAY, TODAY, 0, 0, [])
-    data.reset(c, TODAY)       # connection stays open: this is what failed on Windows before
-    assert "Extra" not in set(data.all_tournaments(c)["name"])
-    assert len(data.athletes(c)) == 10
-    assert auth.authenticate(c, "admin", data.DEMO_PASSWORD) is not None
+def test_new_database_is_empty_with_no_accounts(tmp_path):
+    c = data.connect(tmp_path / "new.db")
+    assert data.is_empty(c) and not data.has_admin(c)
+    assert c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+    assert data.all_tournaments(c).empty
     c.close()
 
 
-def test_demo_dates_roll_forward(con):
-    before = data.all_tournaments(con)["start_date"].min()
-    shifted = data.refresh_demo_dates(con, TODAY + timedelta(days=30))
-    assert shifted == 30
-    assert data.all_tournaments(con)["start_date"].min() == before + timedelta(days=30)
-    assert data.refresh_demo_dates(con, TODAY + timedelta(days=30)) == 0
+def test_database_path_from_env_and_folder_created(tmp_path, monkeypatch):
+    target = tmp_path / "deep" / "dir" / "planner.db"
+    monkeypatch.setenv("PLANNER_DB", str(target))
+    assert data.db_path() == str(target)
+    c = data.connect()
+    c.close()
+    assert target.exists()
 
 
-def test_demo_dates_frozen_once_real_data(con):
-    data.set_meta(con, "demo", "0")
-    assert data.refresh_demo_dates(con, TODAY + timedelta(days=30)) == 0
+def test_backup_and_restore_roundtrip(con, tmp_path):
+    raw = data.backup_bytes(con)
+    assert raw.startswith(b"SQLite format 3")
+    fresh = data.connect(tmp_path / "fresh.db")
+    res = data.restore_bytes(fresh, raw)
+    assert res["athletes"] == 10 and res["users"] == len(auth.users(con))
+    assert auth.authenticate(fresh, "admin", testkit.PASSWORD).role == "admin"
+    assert fresh.execute("SELECT COUNT(*) FROM auth_sessions").fetchone()[0] == 0
+    fresh.close()
+
+
+def test_restore_refuses_files_that_are_not_backups(con, tmp_path):
+    with pytest.raises(ValueError):
+        data.restore_bytes(con, b"not a database")
+    empty = data.connect(tmp_path / "empty.db")        # a planner database with no admin
+    with pytest.raises(ValueError, match="no admin"):
+        data.restore_bytes(con, data.backup_bytes(empty))
+    empty.close()
+    assert len(data.athletes(con)) == 10               # nothing changed
+
+
+def test_restore_refuses_old_sample_databases(con, tmp_path):
+    old = data.connect(tmp_path / "old.db")
+    testkit.seed(old, TODAY)
+    data.set_meta(old, "demo", "1")
+    assert data.has_legacy_sample_data(old)
+    with pytest.raises(ValueError, match="older version"):
+        data.restore_bytes(con, data.backup_bytes(old))
+    data.wipe(old)
+    assert not data.has_legacy_sample_data(old) and data.is_empty(old) and not data.has_admin(old)
+    old.close()
 
 
 def test_old_database_gets_new_columns(tmp_path):
@@ -132,14 +158,80 @@ def test_old_database_gets_new_columns(tmp_path):
 
 def test_passwords_are_hashed_and_checked(con):
     row = con.execute("SELECT password_hash FROM users WHERE username='admin'").fetchone()
-    assert data.DEMO_PASSWORD not in row[0]
-    assert auth.authenticate(con, "admin", data.DEMO_PASSWORD).role == "admin"
+    assert testkit.PASSWORD not in row[0]
+    assert auth.authenticate(con, "admin", testkit.PASSWORD).role == "admin"
     assert auth.authenticate(con, "admin", "wrong") is None
     assert auth.authenticate(con, "nobody", "x") is None
 
 
+def test_no_default_passwords_in_the_code():
+    """No account in the app is created with a fixed or guessable password: only the tests' fixtures have one."""
+    from pathlib import Path
+    root = Path(__file__).parent
+    shipped = [p for p in root.rglob("*.py") if not p.name.startswith("test_") and p.name != "testkit.py"]
+    for p in shipped:
+        text = p.read_text()
+        assert testkit.PASSWORD not in text and "planner-demo" not in text, p
+
+
+def test_lockout_after_repeated_wrong_passwords(con):
+    for _ in range(auth.MAX_FAILURES):
+        assert auth.authenticate(con, "coach.cricket", "wrong-guess") is None
+    with pytest.raises(auth.AccountLocked):
+        auth.authenticate(con, "coach.cricket", testkit.PASSWORD)      # even the right one, while locked
+    con.execute("UPDATE login_failures SET at='2000-01-01T00:00:00'")   # lock has expired
+    assert auth.authenticate(con, "coach.cricket", testkit.PASSWORD) is not None
+    assert con.execute("SELECT COUNT(*) FROM login_failures WHERE username='coach.cricket'").fetchone()[0] == 0
+
+
+def test_lockout_is_per_username(con):
+    for _ in range(auth.MAX_FAILURES):
+        auth.authenticate(con, "coach.cricket", "wrong-guess")
+    assert auth.authenticate(con, "ped", testkit.PASSWORD) is not None
+
+
+def test_temporary_passwords_are_random_and_pass_the_rules():
+    pws = {auth.temporary_password() for _ in range(50)}
+    assert len(pws) == 50
+    for pw in pws:
+        auth.check_password_strength(pw)
+
+
+def test_passwords_equal_to_the_username_are_retired_once(con):
+    u = uid(con, "1RV25CS012")
+    con.execute("UPDATE users SET password_hash=?, must_change_password=1 WHERE id=?",
+                (auth.hash_password("1RV25CS012"), u.id))
+    data.set_meta(con, "checked_username_passwords", "0")
+    assert auth.retire_username_passwords(con) == ["1rv25cs012"]
+    assert auth.authenticate(con, "1RV25CS012", "1RV25CS012") is None
+    assert uid(con, "1RV25CS012").must_change_password
+    assert auth.retire_username_passwords(con) == []          # only once per database
+
+
+def test_admin_reset_gives_a_one_time_password_and_signs_out(con):
+    u = uid(con, "coach.cricket")
+    tok = auth.create_session(con, u.id)
+    pw = auth.reset_password(con, u.id)
+    assert auth.user_from_session(con, tok) is None
+    assert auth.authenticate(con, "coach.cricket", testkit.PASSWORD) is None
+    again = auth.authenticate(con, "coach.cricket", pw)
+    assert again.must_change_password
+
+
+def test_last_admin_cannot_be_removed_or_demoted(con):
+    admin = uid(con, "admin")
+    with pytest.raises(ValueError):
+        auth.delete_user(con, admin.id)
+    with pytest.raises(ValueError):
+        auth.update_user(con, admin.id, role="coach")
+    second = auth.create_user(con, "office2", "Office Two", "admin", auth.temporary_password())
+    auth.delete_user(con, second)
+    auth.create_user(con, "office3", "Office Three", "admin", auth.temporary_password())
+    auth.update_user(con, admin.id, role="coach")      # fine now that another admin exists
+
+
 def test_athlete_login_by_usn_is_case_insensitive(con):
-    u = auth.authenticate(con, "1rv25cs012", "1RV25CS012")
+    u = auth.authenticate(con, "1rv25cs012", testkit.PASSWORD)
     assert u is not None and u.role == "athlete"
     assert data.athlete(con, u.athlete_id)["usn"] == "1RV25CS012"
 
@@ -188,8 +280,8 @@ def test_permission_matrix(con):
 def test_set_password_clears_first_login_flag(con):
     u = uid(con, "coach.football")
     con.execute("UPDATE users SET must_change_password=1 WHERE id=?", (u.id,))
-    auth.set_password(con, u.id, "newpass1")
-    u = auth.authenticate(con, "coach.football", "newpass1")
+    auth.set_password(con, u.id, "new-pass-for-me")
+    u = auth.authenticate(con, "coach.football", "new-pass-for-me")
     assert u and not u.must_change_password
     with pytest.raises(ValueError):
         auth.set_password(con, u.id, "123")
@@ -202,13 +294,17 @@ def test_unknown_role_rejected(con):
 
 def test_password_rules(con):
     u = uid(con, "coach.cricket")
-    for bad in ("short", "coach.cricket", "password", "planner-demo"):
+    for bad in ("short", "coach.cricket", "password123", "my-coach.cricket-pw", "aaaaaaaaaaaa", "123456789"):
         with pytest.raises(ValueError):
             auth.set_password(con, u.id, bad)
     auth.set_password(con, u.id, "a-good-one-9")
+    auth.set_password(con, uid(con, "ped").id, "my-own-ped-pass")   # a short username only blocks itself
+    with pytest.raises(ValueError):                    # admins need a longer one
+        auth.set_password(con, uid(con, "admin").id, "a-good-one")
+    auth.set_password(con, uid(con, "admin").id, "a-longer-good-one")
 
 
-# ----------------------------------------------------------------- remember-me sessions
+# ----------------------------------------------------------------- sign-in sessions
 
 def test_session_token_roundtrip_and_logout(con):
     u = uid(con, "1RV25CS012")
@@ -227,21 +323,20 @@ def test_expired_session_rejected(con):
     assert auth.user_from_session(con, tok) is None
 
 
-# ----------------------------------------------------------------- real-data switch, deletion
+def test_end_all_sessions_can_keep_this_device(con):
+    u = uid(con, "ped")
+    here, there = auth.create_session(con, u.id), auth.create_session(con, u.id)
+    auth.end_all_sessions(con, u.id, keep_token=here)
+    assert auth.user_from_session(con, here).id == u.id and auth.user_from_session(con, there) is None
 
-def test_start_fresh_removes_demo_logins_and_keeps_settings(con):
-    import settings
-    settings.set(con, "attendance_min_pct", 75)
-    with pytest.raises(ValueError):
-        data.start_fresh(con, "sports.office", "short")
-    data.start_fresh(con, "sports.office", "Strong-pass-1")
-    assert auth.authenticate(con, "admin", data.DEMO_PASSWORD) is None
-    assert auth.authenticate(con, "1RV25CS012", "1RV25CS012") is None
-    assert auth.authenticate(con, "sports.office", "Strong-pass-1").role == "admin"
-    assert data.is_empty(con) and data.get_meta(con, "demo") == "0"
-    assert settings.get(con, "attendance_min_pct") == 75
-    assert data.refresh_demo_dates(con, TODAY + timedelta(days=30)) == 0
 
+def test_tokens_are_long_and_random(con):
+    u = uid(con, "ped")
+    toks = {auth.create_session(con, u.id) for _ in range(20)}
+    assert len(toks) == 20 and all(len(t) >= 40 for t in toks)
+
+
+# ----------------------------------------------------------------- deletion
 
 def test_delete_athlete_removes_everything_and_emits(con):
     seen = []

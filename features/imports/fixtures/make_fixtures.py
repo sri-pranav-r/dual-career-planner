@@ -1,9 +1,9 @@
 """
-Builds the demo files in this folder, laid out like real college documents:
+Builds the parser test fixtures in this folder (made-up files laid out like real college documents):
   timetable-cse-3a.xlsx   department grid with merged lab cells and a code legend
   timetable-cse-3a.png    the same grid as a screenshot (for the OCR path)
   exam-calendar-odd-sem.pdf  calendar of events + subject-wise CIE timetable
-Run: python3 make_samples.py
+Run: python3 make_fixtures.py
 """
 from pathlib import Path
 

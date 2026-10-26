@@ -1,5 +1,17 @@
 [client]
 toolbarMode = "minimal"
+# Unexpected errors show a short message, never a traceback (the full error goes to the server log).
+showErrorDetails = "none"
+
+[server]
+headless = true
+runOnSave = false
+enableXsrfProtection = true
+# Roster sheets, timetables, exam calendars and backups stay well under this.
+maxUploadSize = 25
 
 [browser]
 gatherUsageStats = false
+
+[logger]
+level = "info"

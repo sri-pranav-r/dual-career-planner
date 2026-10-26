@@ -15,6 +15,7 @@ import argparse
 import json
 from datetime import date
 
+import config
 import data
 
 from . import logic
@@ -22,11 +23,12 @@ from . import logic
 
 def main(argv=None) -> dict | None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--db", help="database path (default: env PLANNER_DB or planner.db)")
+    ap.add_argument("--db", help="database path (default: PLANNER_DB or planner.db)")
     ap.add_argument("--today", type=date.fromisoformat, help="pretend today is YYYY-MM-DD")
     ap.add_argument("--force", action="store_true", help="run even if today's run already happened")
     ap.add_argument("--report", action="store_true", help="build the weekly team load reports now")
     args = ap.parse_args(argv)
+    config.load_secrets_into_env()   # .streamlit/secrets.toml, when the reminder settings live there
     con = data.connect(args.db)
     if args.force or args.report:
         out = logic.run_all(con, args.today, report=True if args.report else None)

@@ -82,8 +82,8 @@ def render_timetable_import(con, user):
     fmt = "CSV, XLSX" + (", PNG, JPG" if parsers.ocr_available() else "")
     up = st.file_uploader(f"Timetable file ({fmt})", key="imp_tt_file",
                           type=["csv", "xlsx", "xls"] + (["png", "jpg", "jpeg"] if parsers.ocr_available() else []))
-    st.download_button("Download a sample sheet", parsers.timetable_template_csv(),
-                       "timetable-sample.csv", "text/csv", key="imp_tt_tpl")
+    st.download_button("Download a template", parsers.timetable_template_csv(),
+                       "timetable-template.csv", "text/csv", key="imp_tt_tpl", on_click="ignore")
     if not up:
         return
     try:

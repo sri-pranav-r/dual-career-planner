@@ -5,13 +5,17 @@ Roles: athlete, coach, faculty, admin. A coach with no sport is the Physical
 Education Director (PED) and sees every sport. Faculty see athletes in their
 department, narrowed by sem/section when those are set on their account.
 
-Passwords are PBKDF2-SHA256 with a per-user salt (stdlib only).
+Passwords are PBKDF2-SHA256 with a per-user salt (stdlib only). There are no
+default passwords: the first admin chooses one at setup, and every other account
+starts with a random one-time password that must be changed at first sign-in.
+After repeated wrong passwords an account is locked for a while.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
 import os
+import secrets
 from dataclasses import dataclass, fields
 from datetime import datetime, timedelta
 
@@ -66,6 +70,9 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
+_DUMMY_HASH = hash_password(os.urandom(8).hex())
+
+
 # ----------------------------------------------------------------- accounts
 
 def _norm_username(username: str) -> str:
@@ -108,29 +115,113 @@ def user_by_username(con, username) -> User | None:
     return None if df.empty else _row_to_user(df.iloc[0].to_dict())
 
 
+MAX_FAILURES = 5          # wrong passwords in a row ...
+LOCK_MINUTES = 15         # ... lock the username for this long
+
+
+class AccountLocked(Exception):
+    pass
+
+
+def _recent_failures(con, name) -> int:
+    since = (datetime.now() - timedelta(minutes=LOCK_MINUTES)).isoformat(timespec="seconds")
+    return con.execute("SELECT COUNT(*) FROM login_failures WHERE username=? AND at>=?", (name, since)).fetchone()[0]
+
+
 def authenticate(con, username, password) -> User | None:
-    row = con.execute("SELECT id, password_hash FROM users WHERE username=?", (_norm_username(username),)).fetchone()
+    """The user, or None for a wrong username or password. Raises AccountLocked after too many failures."""
+    name = _norm_username(username)
+    if _recent_failures(con, name) >= MAX_FAILURES:
+        raise AccountLocked(f"Too many wrong passwords. Try again in {LOCK_MINUTES} minutes, or ask the sports "
+                            "office admin to reset your password.")
+    row = con.execute("SELECT id, password_hash FROM users WHERE username=?", (name,)).fetchone()
     if not row or not verify_password(password, row[1]):
+        if not row:
+            verify_password(password, _DUMMY_HASH)   # same time taken whether or not the username exists
+        now = datetime.now()
+        con.execute("INSERT INTO login_failures(username, at) VALUES (?,?)", (name, now.isoformat(timespec="seconds")))
+        con.execute("DELETE FROM login_failures WHERE at < ?", ((now - timedelta(days=1)).isoformat(timespec="seconds"),))
+        con.commit()
         return None
+    con.execute("DELETE FROM login_failures WHERE username=?", (name,))
+    con.commit()
     return get_user(con, row[0])
 
 
-COMMON_PASSWORDS = {"password", "12345678", "123456789", "qwertyui", "planner-demo", "admin123", "password1"}
+MIN_LENGTH = 10
+ADMIN_MIN_LENGTH = 12
+COMMON_PASSWORDS = {
+    "password", "password1", "password123", "passw0rd", "12345678", "123456789", "1234567890", "qwertyuiop",
+    "qwerty123", "iloveyou", "admin123", "administrator", "welcome1", "welcome123", "letmein123", "changeme",
+    "football", "cricket123", "sunshine1", "trustno1", "abc123456", "11111111", "00000000", "1q2w3e4r5t",
+}
 
 
-def check_password_strength(password: str, username: str | None = None) -> None:
-    if len(password or "") < 8:
-        raise ValueError("Password must be at least 8 characters.")
-    if password.lower() in COMMON_PASSWORDS or (username and password.lower() == str(username).lower()):
-        raise ValueError("Pick a password that isn't your USN/username or a common password.")
+def check_password_strength(password: str, username: str | None = None, min_length: int = MIN_LENGTH) -> None:
+    pw = password or ""
+    if len(pw) < min_length:
+        raise ValueError(f"Password must be at least {min_length} characters.")
+    low = pw.lower()
+    if low in COMMON_PASSWORDS or len(set(low)) < 4:
+        raise ValueError("That password is too easy to guess. Try a few unrelated words.")
+    name = str(username or "").strip().lower()
+    if name and (name in low if len(name) >= 4 else low == name):   # short names like "ped" only as the whole password
+        raise ValueError("The password can't contain your USN or username.")
+
+
+# No 0/O, 1/l/I: these are read off a printout or a phone screen.
+_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
+def temporary_password() -> str:
+    """A random one-time password like 'k7pm-x3qt-9wbn', for new accounts and resets."""
+    return "-".join("".join(secrets.choice(_ALPHABET) for _ in range(4)) for _ in range(3))
 
 
 def set_password(con, user_id, new_password):
+    """The person's own new password. Signs out their other devices."""
     u = get_user(con, user_id)
-    check_password_strength(new_password, u.username if u else None)
+    check_password_strength(new_password, u.username if u else None,
+                            ADMIN_MIN_LENGTH if u and u.role == "admin" else MIN_LENGTH)
     con.execute("UPDATE users SET password_hash=?, must_change_password=0 WHERE id=?",
                 (hash_password(new_password), int(user_id)))
     con.commit()
+
+
+def reset_password(con, user_id) -> str:
+    """An admin reset: a new one-time password, to be changed at next sign-in. Ends the person's sessions."""
+    pw = temporary_password()
+    con.execute("UPDATE users SET password_hash=?, must_change_password=1 WHERE id=?",
+                (hash_password(pw), int(user_id)))
+    con.execute("DELETE FROM auth_sessions WHERE user_id=?", (int(user_id),))
+    con.execute("DELETE FROM login_failures WHERE username=(SELECT username FROM users WHERE id=?)", (int(user_id),))
+    con.commit()
+    return pw
+
+
+def retire_username_passwords(con) -> list[str]:
+    """
+    Versions before v7 gave imported athletes their USN as the first password. Any account still
+    using its username as its password gets an unknown random one instead (an admin resets it on
+    the Users page to hand out a one-time password). Runs once per database. Returns the usernames.
+    """
+    if data.get_meta(con, "checked_username_passwords") == "1":
+        return []
+    retired = []
+    # Only first passwords that were never changed can be the USN (choosing your username was always refused).
+    for uid_, username, stored in con.execute(
+            "SELECT id, username, password_hash FROM users WHERE must_change_password=1").fetchall():
+        if verify_password(username, stored) or verify_password(username.upper(), stored):
+            con.execute("UPDATE users SET password_hash=?, must_change_password=1 WHERE id=?",
+                        (hash_password(secrets.token_urlsafe(24)), uid_))
+            con.execute("DELETE FROM auth_sessions WHERE user_id=?", (uid_,))
+            retired.append(username)
+    data.set_meta(con, "checked_username_passwords", "1")
+    return retired
+
+
+def admin_count(con) -> int:
+    return con.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0]
 
 
 def users(con):
@@ -145,6 +236,9 @@ def update_user(con, user_id, **fields_):
         raise ValueError(f"Cannot update {sorted(bad)}")
     if "role" in fields_ and fields_["role"] not in ROLES:
         raise ValueError(f"Unknown role {fields_['role']!r}")
+    u = get_user(con, user_id)
+    if u and u.role == "admin" and fields_.get("role", "admin") != "admin" and admin_count(con) <= 1:
+        raise ValueError("This is the only admin account. Make another admin first.")
     if fields_:
         con.execute(f"UPDATE users SET {', '.join(f'{k}=?' for k in fields_)} WHERE id=?",
                     (*[v if v != "" else None for v in fields_.values()], int(user_id)))
@@ -152,6 +246,10 @@ def update_user(con, user_id, **fields_):
 
 
 def delete_user(con, user_id):
+    u = get_user(con, user_id)
+    if u and u.role == "admin" and admin_count(con) <= 1:
+        raise ValueError("This is the only admin account, so it can't be deleted.")
+    con.execute("DELETE FROM auth_sessions WHERE user_id=?", (int(user_id),))
     con.execute("DELETE FROM users WHERE id=?", (int(user_id),))
     con.commit()
 
@@ -197,14 +295,18 @@ def can_view_athlete(con, user: User | None, athlete_id) -> bool:
     return athlete_id is not None and int(athlete_id) in visible_athlete_ids(con, user)
 
 
-# ----------------------------------------------------------------- remember-me tokens
+# ----------------------------------------------------------------- sign-in tokens
+
+def _token_hash(token) -> str:
+    return hashlib.sha256(str(token).encode()).hexdigest()
+
 
 def create_session(con, user_id, days: float = 30) -> str:
-    """New login token. Only its hash is stored."""
-    token = os.urandom(24).hex()
+    """New sign-in token. Only its hash is stored."""
+    token = secrets.token_urlsafe(32)
     now = datetime.now()
     con.execute("INSERT INTO auth_sessions(token_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)",
-                (hashlib.sha256(token.encode()).hexdigest(), int(user_id), now.isoformat(timespec="seconds"),
+                (_token_hash(token), int(user_id), now.isoformat(timespec="seconds"),
                  (now + timedelta(days=days)).isoformat(timespec="seconds")))
     con.commit()
     return token
@@ -213,68 +315,116 @@ def create_session(con, user_id, days: float = 30) -> str:
 def user_from_session(con, token) -> User | None:
     if not token:
         return None
-    row = con.execute("SELECT user_id, expires_at FROM auth_sessions WHERE token_hash=?",
-                      (hashlib.sha256(str(token).encode()).hexdigest(),)).fetchone()
+    row = con.execute("SELECT user_id, expires_at FROM auth_sessions WHERE token_hash=?", (_token_hash(token),)).fetchone()
     if not row or row[1] < datetime.now().isoformat(timespec="seconds"):
         return None
     return get_user(con, row[0])
 
 
+def session_expiry(con, token) -> datetime | None:
+    row = con.execute("SELECT expires_at FROM auth_sessions WHERE token_hash=?", (_token_hash(token),)).fetchone()
+    return datetime.fromisoformat(row[0]) if row else None
+
+
 def end_session(con, token) -> None:
     if token:
-        con.execute("DELETE FROM auth_sessions WHERE token_hash=?", (hashlib.sha256(str(token).encode()).hexdigest(),))
-        con.execute("DELETE FROM auth_sessions WHERE expires_at < ?", (datetime.now().isoformat(timespec="seconds"),))
-        con.commit()
+        con.execute("DELETE FROM auth_sessions WHERE token_hash=?", (_token_hash(token),))
+    con.execute("DELETE FROM auth_sessions WHERE expires_at < ?", (datetime.now().isoformat(timespec="seconds"),))
+    con.commit()
 
 
-def end_all_sessions(con, user_id) -> None:
-    con.execute("DELETE FROM auth_sessions WHERE user_id=?", (int(user_id),))
+def end_all_sessions(con, user_id, keep_token=None) -> None:
+    """Sign a person out everywhere (optionally except the current browser)."""
+    if keep_token:
+        con.execute("DELETE FROM auth_sessions WHERE user_id=? AND token_hash<>?", (int(user_id), _token_hash(keep_token)))
+    else:
+        con.execute("DELETE FROM auth_sessions WHERE user_id=?", (int(user_id),))
     con.commit()
 
 
 # ----------------------------------------------------------------- streamlit session
+#
+# The sign-in token lives in a cookie, never in the page address, so copying a link
+# never shares a signed-in session. The browser sends the cookie when the page opens
+# (st.context.cookies); a tiny script (st.html with JavaScript) sets or clears it,
+# because Streamlit itself can't write cookies.
+
+COOKIE = "planner_session"
+LEGACY_PARAM = "s"   # versions before v7 kept the token in ?s=; it is dropped from the address
+
 
 def current_user() -> User | None:
     import streamlit as st
     return st.session_state.get("user")
 
 
-SESSION_PARAM = "s"
+def _cookie_token() -> str | None:
+    import streamlit as st
+    try:
+        return st.context.cookies.get(COOKIE)
+    except Exception:  # noqa: BLE001 - no request context (tests)
+        return None
 
 
 def login_session(user: User, con=None, remember: bool = False) -> None:
-    """Sign in for this browser tab; the token in ?s= keeps it through refreshes (12 h, or 30 days)."""
+    """Sign in for this browser: 12 hours, or 30 days when "keep me signed in" is ticked."""
     import streamlit as st
-    st.session_state["user"] = user
     own = con is None
     con = con or data.connect()
-    st.query_params[SESSION_PARAM] = create_session(con, user.id, days=30 if remember else 0.5)
+    days = 30 if remember else 0.5
+    token = create_session(con, user.id, days=days)
     if own:
         con.close()
+    st.session_state["user"] = user
+    st.session_state["session_token"] = token
+    st.session_state["cookie_action"] = ("set", token, int(days * 86400))
 
 
 def restore_session(con) -> User | None:
-    """Called on every page load: the user from this tab's state, else from the ?s= token."""
+    """Called on every page load: the user from this tab's state, else from the sign-in cookie."""
     import streamlit as st
+    if LEGACY_PARAM in st.query_params:
+        del st.query_params[LEGACY_PARAM]
     u = st.session_state.get("user")
-    if u is None:
-        u = user_from_session(con, st.query_params.get(SESSION_PARAM))
+    token = st.session_state.get("session_token")
+    if u is not None and token and user_from_session(con, token) is None:
+        u = None                       # signed out elsewhere, expired, or the password was reset
+        st.session_state.pop("user", None)
+        st.session_state.pop("session_token", None)
+    if u is None and st.session_state.get("cookie_action", ("",))[0] != "clear":
+        token = _cookie_token()
+        u = user_from_session(con, token)
         if u is not None:
             st.session_state["user"] = u
+            st.session_state["session_token"] = token
     return u
 
 
 def logout_session(con=None) -> None:
     import streamlit as st
     st.session_state.pop("user", None)
-    token = st.query_params.get(SESSION_PARAM)
-    if token:
-        own = con is None
-        con = con or data.connect()
-        end_session(con, token)
-        if own:
-            con.close()
-        del st.query_params[SESSION_PARAM]
+    token = st.session_state.pop("session_token", None) or _cookie_token()
+    own = con is None
+    con = con or data.connect()
+    end_session(con, token)
+    if own:
+        con.close()
+    st.session_state["cookie_action"] = ("clear", "", 0)
+
+
+def cookie_script() -> str | None:
+    """The script that stores or clears the sign-in cookie in this browser, if one is due."""
+    import json
+
+    import streamlit as st
+    action = st.session_state.get("cookie_action")
+    if not action:
+        return None
+    kind, token, max_age = action
+    value = f"{COOKIE}={token}; Path=/; SameSite=Strict; Max-Age={max_age if kind == 'set' else 0}"
+    return ("<script>(function(){var c=" + json.dumps(value) + ";"
+            "if(location.protocol==='https:'){c+='; Secure';}"
+            "document.cookie=c;})();</script>")
 
 
 def login_form(key: str = "login") -> None:
@@ -286,7 +436,12 @@ def login_form(key: str = "login") -> None:
         remember = st.checkbox("Keep me signed in on this device for 30 days")
         if st.form_submit_button("Sign in", type="primary"):
             con = data.connect()
-            user = authenticate(con, username, password)
+            try:
+                user = authenticate(con, username, password)
+            except AccountLocked as err:
+                con.close()
+                st.error(str(err))
+                return
             if user:
                 login_session(user, con, remember)
                 con.close()

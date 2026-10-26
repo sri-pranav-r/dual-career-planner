@@ -13,6 +13,7 @@ import core
 import data
 import hooks
 from features.records import logic
+import testkit
 
 T = date.today()   # add_injury refuses future dates, so the seed is anchored on the real today
 
@@ -21,7 +22,7 @@ T = date.today()   # add_injury refuses future dates, so the seed is anchored on
 def con():
     hooks.clear()
     c = data.connect(":memory:")      # registers every feature's hooks, ours included
-    data.seed(c, today=T)
+    testkit.seed(c, today=T)
     yield c
     c.close()
 
@@ -366,10 +367,11 @@ def _ui_script():
 
     import auth as _auth
     import data as _data
+    import testkit
     from features.records import logic as _logic, ui as _ui
 
     con = _data.connect(":memory:")
-    _data.seed(con, today=_date.today())
+    testkit.seed(con, today=_date.today())
     a = _data.athlete_by_usn(con, "1RV25CS012")["id"]
     _logic.add_injury(con, a, _date.today(), "Ankle", "rolled", 10, logged_by="t")
     _logic.request_deletion(con, a, "test")

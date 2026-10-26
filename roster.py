@@ -3,10 +3,12 @@ Roster import from the sports department spreadsheet (.csv or .xlsx).
 
 parse(file)          -> DataFrame with canonical columns, whatever the sheet called them
 validate(df)         -> (clean_rows: list[dict], problems: list[str])
-apply(con, rows)     -> {"created": n, "updated": n, "accounts": n, "athlete_ids": [...]}
+apply(con, rows)     -> {"created": n, "updated": n, "accounts": n, "athlete_ids": [...],
+                         "credentials": [{"usn", "name", "password"}, ...]}
 
-New athletes get a login: username = USN, first password = USN, and they are
-asked to change it on first sign-in.
+New athletes get a login: username = USN and a random one-time password, which the
+person importing hands out (it is shown once, with a CSV download). They are asked
+to change it on first sign-in.
 """
 from __future__ import annotations
 
@@ -122,7 +124,7 @@ def validate(df: pd.DataFrame) -> tuple[list[dict], list[str]]:
 
 def apply(con, rows: list[dict]) -> dict:
     created = updated = accounts = 0
-    ids = []
+    ids, credentials = [], []
     for rec in rows:
         aid, is_new = data.upsert_athlete(con, rec)
         ids.append(aid)
@@ -132,18 +134,24 @@ def apply(con, rows: list[dict]) -> dict:
         u = auth.user_by_username(con, rec["usn"])
         if u is None:
             con.commit()
-            auth.create_user(con, rec["usn"], a["name"], "athlete", rec["usn"], athlete_id=aid, dept=a["dept"],
+            pw = auth.temporary_password()
+            auth.create_user(con, rec["usn"], a["name"], "athlete", pw, athlete_id=aid, dept=a["dept"],
                              sem=a["sem"], section=a["section"], sport=a["sport"], must_change_password=True)
+            credentials.append({"usn": rec["usn"], "name": a["name"], "password": pw})
             accounts += 1
         else:
             auth.update_user(con, u.id, name=a["name"], dept=a["dept"], sem=a["sem"], section=a["section"], sport=a["sport"])
     con.commit()
     result = {"created": created, "updated": updated, "accounts": accounts, "athlete_ids": ids}
     hooks.emit(con, "roster_imported", result)
-    return result
+    return {**result, "credentials": credentials}
 
 
-TEMPLATE_CSV = (
-    "USN,Name,Department,Semester,Section,Sport,Proctor,Phone,Email\n"
-    "1RV25CS012,Aarav Kulkarni,CSE,3,A,Cricket,Dr. Meena R,98XXXXXXXX,aarav@example.edu\n"
-)
+def credentials_csv(credentials: list[dict]) -> bytes:
+    """One-time passwords to hand out, as a CSV (USN, name, one-time password)."""
+    df = pd.DataFrame(credentials, columns=["usn", "name", "password"])
+    return df.rename(columns={"usn": "USN", "name": "Name", "password": "One-time password"}).to_csv(index=False).encode()
+
+
+# Headers only: an example row would be imported as a real athlete if the template went back unchanged.
+TEMPLATE_CSV = "USN,Name,Department,Semester,Section,Sport,Proctor,Phone,Email\n"

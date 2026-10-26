@@ -10,6 +10,7 @@ import auth
 import data
 import hooks
 from features.plan import logic
+import testkit
 
 T = date.today()
 AARAV, DIYA, ROHAN, SNEHA, ANANYA, MEGHANA = ("1RV25CS012", "1RV25CS034", "1RV25EC077", "1RV25ME021",
@@ -20,7 +21,7 @@ AARAV, DIYA, ROHAN, SNEHA, ANANYA, MEGHANA = ("1RV25CS012", "1RV25CS034", "1RV25
 def con():
     hooks.clear()
     c = data.connect(":memory:")
-    data.seed(c, today=T)
+    testkit.seed(c, today=T)
     yield c
     c.close()
 

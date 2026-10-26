@@ -7,6 +7,7 @@ import pytest
 import data
 import hooks
 from features.reminders import logic, senders
+import testkit
 
 TODAY = date(2026, 9, 28)   # a Monday
 
@@ -27,7 +28,7 @@ class FakeSender:
 def con(monkeypatch):
     monkeypatch.setattr(logic, "base_url", lambda con: "http://planner.test")
     c = data.connect(":memory:")
-    data.seed(c, today=TODAY)
+    testkit.seed(c, today=TODAY)
     c.execute("DELETE FROM letters_notifications")
     c.commit()
     yield c
@@ -276,7 +277,7 @@ def test_cli_runs_against_a_db_file(tmp_path, monkeypatch, capsys):
     from features.reminders import run
     db = tmp_path / "p.db"
     c = data.connect(str(db))
-    data.seed(c, today=TODAY)
+    testkit.seed(c, today=TODAY)
     c.close()
     monkeypatch.delenv("PLANNER_REMINDERS_LIVE", raising=False)
     out = run.main(["--db", str(db), "--today", TODAY.isoformat()])
