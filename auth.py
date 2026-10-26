@@ -346,8 +346,8 @@ def end_all_sessions(con, user_id, keep_token=None) -> None:
 #
 # The sign-in token lives in a cookie, never in the page address, so copying a link
 # never shares a signed-in session. The browser sends the cookie when the page opens
-# (st.context.cookies); a tiny script (st.html with JavaScript) sets or clears it,
-# because Streamlit itself can't write cookies.
+# (st.context.cookies); a tiny script sets or clears it, because Streamlit itself
+# can't write cookies (app.write_cookie runs it).
 
 COOKIE = "planner_session"
 LEGACY_PARAM = "s"   # versions before v7 kept the token in ?s=; it is dropped from the address
@@ -422,9 +422,12 @@ def cookie_script() -> str | None:
         return None
     kind, token, max_age = action
     value = f"{COOKIE}={token}; Path=/; SameSite=Strict; Max-Age={max_age if kind == 'set' else 0}"
-    return ("<script>(function(){var c=" + json.dumps(value) + ";"
-            "if(location.protocol==='https:'){c+='; Secure';}"
-            "document.cookie=c;})();</script>")
+    # Runs either in the app page (st.html) or in a same-origin component frame (older Streamlit),
+    # so it writes to the app page's document, whichever window that is.
+    return ("<script>(function(){var w=window;try{if(window.parent&&window.parent.document){w=window.parent;}}"
+            "catch(e){}var c=" + json.dumps(value) + ";"
+            "if(w.location.protocol==='https:'){c+='; Secure';}"
+            "w.document.cookie=c;})();</script>")
 
 
 def login_form(key: str = "login") -> None:

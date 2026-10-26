@@ -1,4 +1,4 @@
-streamlit>=1.66  # tested with 1.66; sign-in cookies need st.html(unsafe_allow_javascript=True)
+streamlit>=1.50  # tested with 1.50 and 1.66
 pandas>=2.0
 python-docx>=1.0
 openpyxl>=3.1

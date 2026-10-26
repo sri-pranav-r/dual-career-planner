@@ -14,6 +14,7 @@ import config
 
 config.load_secrets_into_env()   # before settings.py reads PLANNER_BASE_URL
 
+import inspect
 import logging
 import os
 import uuid
@@ -86,7 +87,11 @@ def write_cookie():
     script = auth.cookie_script()
     if script:
         with st.container(key="cookie_js"):
-            st.html(script, unsafe_allow_javascript=True)
+            if "unsafe_allow_javascript" in inspect.signature(st.html).parameters:
+                st.html(script, unsafe_allow_javascript=True)
+            else:   # Streamlit before 1.5x: scripts run in a hidden component frame instead
+                import streamlit.components.v1 as components
+                components.html(script, height=0)
 
 
 def legacy_page():
